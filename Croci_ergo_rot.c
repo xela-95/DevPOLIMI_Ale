@@ -23,8 +23,7 @@
 #include <netinet/in.h>
 #include <netdb.h> 
 #include <unistd.h>
-
-hftrytufbyfuty
+//coomento
 #include <string.h>
 //include da Comunicazione
 #include <time.h>
