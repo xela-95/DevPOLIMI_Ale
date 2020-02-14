@@ -23,9 +23,6 @@
 #include <netinet/in.h>
 #include <netdb.h> 
 #include <unistd.h>
-//coomento
-
-
 #include <string.h>
 //include da Comunicazione
 #include <time.h>
@@ -54,6 +51,9 @@ volatile bool stop_mod5, abnormal_behaviour;
 static float af_PosErr[GBM_NAX_OPEN];    // following error [delta giri]
 static float af_PosErrMax[GBM_NAX_OPEN]; // massimo following error consentito [delta giri]
 
+// utility funtions **********************************************************************
+
+// trasposta di matrice
 int matrix_transpose(orientation_matrix matrix, orientation_matrix result) {
 	memset(&(result[0][0]), 0, 9 * sizeof(double));
 	int i, j;
@@ -64,7 +64,7 @@ int matrix_transpose(orientation_matrix matrix, orientation_matrix result) {
 	}
 	return 0;
 }
-
+// prodotto di matrici di rotzione
 int matrix_matrix_mult(orientation_matrix matrix1, orientation_matrix matrix2, orientation_matrix result) {
 
 	memset(&(result[0][0]), 0, 9 * sizeof(double));
@@ -73,6 +73,7 @@ int matrix_matrix_mult(orientation_matrix matrix1, orientation_matrix matrix2, o
 	return 0;
 
 }
+// prodotto matrice di rotazione per vettore
 int matrix_vector_mult(orientation_matrix matrix, translation_vector vector, translation_vector result) {
 
 	memset(&(result[0]), 0, 3 * sizeof(double));
@@ -81,21 +82,163 @@ int matrix_vector_mult(orientation_matrix matrix, translation_vector vector, tra
 	return 0;
 
 }
-
+//prodotto matrice omogenea per vettore traslazione
 int pose_vector_mult(pose_matrix matrix, translation_vector vector, translation_vector result){
 	
 	memset(&(result[0]), 0, 3 * sizeof(double));
 	orientation_matrix R;
 	translation_vector t;
-	pose_mat_getRT(&matrix, &R, &t);
+	pose_mat_getRT(matrix, R, t);
 	
-	matrix_vector_mult(&R, &vector, &result);
+	matrix_vector_mult(R, vector, result);
 	result[0] += t[0];
 	result[1] += t[1];
 	result[2] += t[2];
 		
 	return 0;
 }
+int pose_pose_mult(pose_matrix m1, pose_matrix m2, pose_matrix res) {
+	memset(&(res[0]), 0, 4 * 3 * sizeof(double));
+
+	double m1_full[4][4] = { {m1[0][0], m1[0][1], m1[0][2], m1[0][3]},{m1[1][0], m1[1][1], m1[1][2], m1[1][3]},{m1[2][0], m1[2][1], m1[2][2], m1[2][3]},{0,0,0,1} };
+	double m2_full[4][4] = { {m2[0][0], m2[0][1], m2[0][2], m2[0][3]},{m2[1][0], m2[1][1], m2[1][2], m2[1][3]},{m2[2][0], m2[2][1], m2[2][2], m2[2][3]},{0,0,0,1} };
+
+	int i, j, k;
+
+	for (i = 0; i < 3; i++) for (j = 0; j < 4; j++) for (k = 0; k < 4; k++) res[i][j] += m1_full[i][k] * m2_full[k][j];
+
+	return 0;
+}
+//print translation vector
+void print_vector(translation_vector v) {
+	printf("\n t = (%6.2f, %6.2f, %6.2f)\n", v[0], v[1], v[2]);
+}
+// differenza (v1-v2) di vettori posizione
+int vector_diff(translation_vector v1, translation_vector v2, translation_vector res) {
+	memset(&(res[0]), 0, 3 * sizeof(double));
+
+	for (int i = 0;i < 3;i++)	res[i] = v1[i] - v2[i];
+
+	return 0;
+}
+//somma (v1+v2) di vettori posizione
+int vector_sum(translation_vector v1, translation_vector v2, translation_vector res) {
+	memset(&(res[0]), 0, 3 * sizeof(double));
+
+	for (int i = 0;i < 3;i++)	res[i] = v1[i] + v2[i];
+
+	return 0;
+}
+// prodotto di uno scalare per un vettore
+int scalar_vect_mult(double c, translation_vector v, translation_vector res) {
+	memset(&(res[0]), 0, 3 * sizeof(double));
+
+	for (int i = 0;i < 3;i++)	res[i] = c * v[i];
+
+	return 0;
+}
+// prodotto di vettore posizione: v1' * v2
+double vect_vect_mult(translation_vector v1, translation_vector v2) {
+
+	return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
+
+}
+// calcolo matrice omogenea a partire dai parametri DH
+void evalDHmatrix(pose_matrix A, double alpha, double a, double theta, double d, double offset) {
+	memset(&(A[0][0]), 0, 12 * sizeof(double));
+
+	double cth = cos(theta + offset);
+	double sth = sin(theta + offset);
+	double cal = cos(alpha);
+	double sal = sin(alpha);
+
+	A[0][0] = cth;
+	A[0][1] = -sth * cal;
+	A[0][2] = sth * sal;
+	A[0][3] = a * cth;
+	A[1][0] = sth;
+	A[1][1] = cth * cal;
+	A[1][2] = -cth * sal;
+	A[1][3] = a * sth;
+	A[2][0] = 0;
+	A[2][1] = sal;
+	A[2][2] = cal;
+	A[2][3] = d;
+
+}
+//cinematica diretta -> ritorna tutte le posizioni dei giunti nello spazio
+void fkine(joint_vector q, translation_vector joints[]) {
+	memset(&(joints[0]), 0, 3 * 6 * sizeof(double));
+	pose_matrix A01, A02, A03, A04, A05, A06, A12, A23, A34, A45, A56;
+	double offset_tool = 0.0; //offset lunghezza tool lungo z ee
+
+	//calcolo coord giunto con convenzione comau
+	q[0] = -1 * q[0];
+	q[1] = q[1] - 90;
+	q[2] = -1 * q[2] - 90;
+	q[3] = -1 * q[3];
+	//q[4] = q[4];
+	q[5] = -1 * q[5] - 180;
+
+	for (int i = 0; i < 6; i++)	q[i] *= pi / 180;
+
+	evalDHmatrix(A01, -0.5 * pi, .15, q[0], .45, .0);
+	evalDHmatrix(A12, .0, .59, q[1], .0, 0);	//-.5 * pi come offset teorico ma in pratica non serve
+	evalDHmatrix(A23, -.5 * pi, .13, q[2], .0, .0);
+	evalDHmatrix(A34, .5 * pi, .0, q[3], .6471, .0);
+	evalDHmatrix(A45, -.5 * pi, .0, q[4], .0, .0);
+	evalDHmatrix(A56, .0, .0, q[5], .095 + offset_tool, .0);
+
+	pose_pose_mult(A01, A12, A02);
+	pose_pose_mult(A02, A23, A03);
+	pose_pose_mult(A03, A34, A04);
+	pose_pose_mult(A04, A45, A05);
+	pose_pose_mult(A05, A56, A06);
+
+	orientation_matrix R;
+
+	pose_mat_getRT(A01, R, joints[0]);
+	pose_mat_getRT(A02, R, joints[1]);
+	pose_mat_getRT(A03, R, joints[2]);
+	pose_mat_getRT(A04, R, joints[3]);
+	pose_mat_getRT(A05, R, joints[4]);
+	pose_mat_getRT(A06, R, joints[5]);
+
+	//print_jointvect(q);
+	/*print_posemat(A01);
+	print_posemat(A02);
+	print_posemat(A03);
+	print_posemat(A04);
+	print_posemat(A05);
+	print_posemat(A06);*/
+}
+//calcola s, r_s dati due giunti p_a e p_b
+double obst_link_distance(translation_vector p_obs, translation_vector p_a, translation_vector p_b) {
+	double s, dist;
+
+	translation_vector p_ba, p_aobs, p_s, p_sum_ab, p_s_ba, p_obs_s;
+
+	vector_diff(p_b, p_a, p_ba);
+	vector_diff(p_a, p_obs, p_aobs);
+
+	//ascissa curvilinea
+	s = -vect_vect_mult(p_ba, p_aobs) / vect_vect_mult(p_ba, p_ba);
+	if (s < 0)	s = 0;
+	else if (s > 0)	s = 1;
+
+	//punto corrispondente lungo il link
+	scalar_vect_mult(s, p_ba, p_s_ba);
+	vector_sum(p_a, p_s_ba, p_s);
+
+	//distanza tra p_obs e p_s
+	vector_diff(p_obs, p_s, p_obs_s);
+
+	//printf("s = %6.2f\n", s);
+	//print_vector(p_s);
+	return vector_norm(p_obs_s);
+}
+
+
 
 typedef double quaternion_vec[4];
 int get_quaternion(orientation_matrix matrix, quaternion_vec quaternion) {
@@ -135,7 +278,7 @@ int get_rotation(quaternion_vec quaternion, orientation_matrix matrix) {
 
 double vector_norm(translation_vector v){
 		
-	return sqtr(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+	return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 	
 }
 
@@ -295,11 +438,13 @@ int main(int argc, char *argv[])
 	translation_vector bump_cenH_O = {-bump_height, 0, -bump_depth};
 	translation_vector bump_cenL_O = {bump_height, 0, -bump_depth};
 	translation_vector bump_dxH, bump_dxL, bump_sxH, bump_sxL, bump_cenH, bump_cenL;
-	double safety_cil_radius = 0.5; // raggio cilindro centrato in W [m]
+	double safety_cil_radius = 0.1; // raggio cilindro [m] che avvolge i link del robot per sicurezza
 	bool possible_collision = false; // flag per probabile collisione con link robot
 	bool x_limit = false, y_limit = false, z_limit = false; //flag limiti massimi workspace raggiunti
-	double delta_link = 0.10; // raggio cilindro [m] che avvolge i link del robot per sicurezza
-	
+	double delta_safety = 0.10; // raggio cilindro [m] che avvolge i link del robot per sicurezza
+	translation_vector joints[6]; //posizioni dei giunti nello spazio
+	double dist; //distanza ostacolo link
+
 	
 
     // Rx and Tx packets initialization
@@ -607,7 +752,7 @@ int main(int argc, char *argv[])
 						quaternionToolPoseR[1] = KinectData[3]; //qx
 						quaternionToolPoseR[2] = KinectData[4]; //qy
 						quaternionToolPoseR[3] = KinectData[5]; //qz
-						get_rotation(&quaternionToolPoseR[0], &humanToolPoseR[0][0]);
+						get_rotation(&quaternionToolPoseR[0], humanToolPoseR);
 						valid = (int)KinectData[7];
 						//dai dati del kinect ricavo posizione e orientamento della terna ergonomica
 						humanErgoPoseT[0] = KinectData[8];
@@ -617,7 +762,7 @@ int main(int argc, char *argv[])
 						quaternionErgoPoseR[1] = KinectData[11]; //qxergo
 						quaternionErgoPoseR[2] = KinectData[12]; //qyergo
 						quaternionErgoPoseR[3] = KinectData[13]; //qzergo
-						get_rotation(&quaternionErgoPoseR[0], &humanErgoPoseR[0][0]);
+						get_rotation(&quaternionErgoPoseR[0], humanErgoPoseR);
 						lefthandheight = KinectData[15]; // altezza mano sinistra
 
 
@@ -665,10 +810,10 @@ int main(int argc, char *argv[])
 									//get_quaternion(&errorR_EO_T[0][0], &errorQuat_EO[0]); // errorQuat_EO = rotm2quat(errorR_EO)
 									
 									// Test con inversione terna E
-									matrix_matrix_mult(&humanErgoPoseR[0][0], &Rx_pi[0][0], &RE_rotated[0][0]); // RE_rotated = Rx_pi * RE (Rotazione di 180° della terna E)
-									matrix_transpose(&RO[0][0], &RO_T[0][0]);									// è la trasposta di RO
-									matrix_matrix_mult(&RE_rotated[0][0], &RO_T[0][0], &errorR_EO[0][0]); 		// errorR = Rerg_rot * RO_T
-									get_quaternion(&errorR_EO[0][0], &errorQuat_EO[0]); 						// errorQuat_EO = rotm2quat(errorR_EO)
+									matrix_matrix_mult(humanErgoPoseR, Rx_pi, RE_rotated); // RE_rotated = Rx_pi * RE (Rotazione di 180° della terna E)
+									matrix_transpose(RO, RO_T);									// è la trasposta di RO
+									matrix_matrix_mult(RE_rotated, RO_T, errorR_EO); 		// errorR = Rerg_rot * RO_T
+									get_quaternion(errorR_EO, &errorQuat_EO[0]); 						// errorQuat_EO = rotm2quat(errorR_EO)
 									
 									for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__ * errorQuat_EO[i + 1] * dt; // Wrob = KRw*errorQuat_EO(2:end)';*/
 									
@@ -745,9 +890,9 @@ int main(int argc, char *argv[])
 									transDisp[2] =kappa*__CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[2] - humanToolPoseT[2])*dt;
 									
 									//Controllo rotazionale
-									matrix_transpose(&humanToolPoseR[0][0], &humanToolPoseR_T[0][0]);// è la trasposta della matrice di orientamento del tool frame rispetto al world frame
-									matrix_matrix_mult(&humanErgoPoseR[0][0], &humanToolPoseR_T[0][0], &errorR[0][0]); // errorR = Rerg*Rhum';
-									get_quaternion(&errorR[0][0], &errorQuat[0]); // errorQuat = rotm2quat(errorR);
+									matrix_transpose(humanToolPoseR, humanToolPoseR_T);// è la trasposta della matrice di orientamento del tool frame rispetto al world frame
+									matrix_matrix_mult(humanErgoPoseR, humanToolPoseR_T, errorR); // errorR = Rerg*Rhum';
+									get_quaternion(errorR, &errorQuat[0]); // errorQuat = rotm2quat(errorR);
 									
 									//test errore di orientamento trasposto!
 									//matrix_transpose(&errorR[0][0], &errorR_T[0][0]);
@@ -774,19 +919,19 @@ int main(int argc, char *argv[])
 									}
 									
 									//Controllo collisioni paraurti contro robot o suolo
-									pose_vector_mult(&tool_mpose, &bump_dxH_O, &bump_dxH);
-									pose_vector_mult(&tool_mpose, &bump_dxL_O, &bump_dxL);
-									pose_vector_mult(&tool_mpose, &bump_sxH_O, &bump_sxH);
-									pose_vector_mult(&tool_mpose, &bump_sxL_O, &bump_sxL);
-									pose_vector_mult(&tool_mpose, &bump_cenH_O, &bump_cenH);
-									pose_vector_mult(&tool_mpose, &bump_cenL_O, &bump_cenL);
+									pose_vector_mult(tool_mpose, bump_dxH_O, bump_dxH);
+									pose_vector_mult(tool_mpose, bump_dxL_O, bump_dxL);
+									pose_vector_mult(tool_mpose, bump_sxH_O, bump_sxH);
+									pose_vector_mult(tool_mpose, bump_sxL_O, bump_sxL);
+									pose_vector_mult(tool_mpose, bump_cenH_O, bump_cenH);
+									pose_vector_mult(tool_mpose, bump_cenL_O, bump_cenL);
 									
-									if(norm(bump_dxH) < safety_cil_radius ||
-										norm(bump_dxL) < safety_cil_radius ||
-										norm(bump_sxH) < safety_cil_radius ||
-										norm(bump_sxL) < safety_cil_radius ||
-										norm(bump_cenH) < safety_cil_radius ||
-										norm(bump_cenL) < safety_cil_radius ||){
+									if(vector_norm(bump_dxH) < safety_cil_radius ||
+										vector_norm(bump_dxL) < safety_cil_radius ||
+										vector_norm(bump_sxH) < safety_cil_radius ||
+										vector_norm(bump_sxL) < safety_cil_radius ||
+										vector_norm(bump_cenH) < safety_cil_radius ||
+										vector_norm(bump_cenL) < safety_cil_radius){
 										possible_collision = true;
 									}else
 										possible_collision = false;
@@ -814,13 +959,26 @@ int main(int argc, char *argv[])
 									}else	rot_sat = false;
 									
 									//applico dei fine corsa su posizioni massime end effector in terna W
-									if ((tool_vpose.pos_x < 0.65) && (transDisp[0] < 0)) transDisp[0] = 0.0;
-									if ((tool_vpose.pos_x > 1.50) && (transDisp[0] > 0)) transDisp[0] = 0.0;
-									if ((tool_vpose.pos_y < -1.00) && (transDisp[1] < 0)) transDisp[1] = 0.0;
-									if ((tool_vpose.pos_y > 1.00) && (transDisp[1] > 0)) transDisp[1] = 0.0;
-									if ((tool_vpose.pos_z < bump_length) && (transDisp[2] < 0)) transDisp[2] = 0.0;
-									if ((tool_vpose.pos_z > 1.50) && (transDisp[2] > 0)) transDisp[2] = 0.0;
+									if ((tool_vpose.pos_x < 0.65) && (transDisp[0] < 0) || (tool_vpose.pos_x > 1.50) && (transDisp[0] > 0)){
+										transDisp[0] = 0.0;
+										x_limit = true;
+									}else	x_limit = false;
 									
+									if ((tool_vpose.pos_y < -1.00) && (transDisp[1] < 0) || (tool_vpose.pos_y > 1.00) && (transDisp[1] > 0)){
+										transDisp[1] = 0.0;
+										y_limit = true;
+									}else	y_limit = false;
+									
+									if ((tool_vpose.pos_z < bump_length) && (transDisp[2] < 0) || (tool_vpose.pos_z > 1.30) && (transDisp[2] > 0)){
+										transDisp[2] = 0.0;
+										z_limit = true;
+									}else	z_limit = false;
+
+									// alternative computation of forward kinematics
+									fkine(qComauJoint_act, joints);
+									dist = obst_link_distance(bump_dxH,joints[0],joints[1]);
+
+									//update contatore mod 5
 									contatore = contatore + 1;
 								}
 								else { //misure non valide o mano alzata
@@ -910,12 +1068,12 @@ int main(int argc, char *argv[])
 						Reb[2][1] = sin(theta)*sin(psi);
 						Reb[2][2] = cos(theta);
 						//calcolo posizione areografo rispetto all'end effector
-						matrix_transpose(&Reb[0][0], &Rbe[0][0]); //trasposta della rotazione
+						matrix_transpose(Reb, Rbe); //trasposta della rotazione
 						double diff[3];
 						diff[0] = humanToolPoseT[0] - xyz_end[0];
 						diff[1] = humanToolPoseT[1] - xyz_end[1];
 						diff[2] = humanToolPoseT[2] - xyz_end[2];
-						matrix_vector_mult(&Rbe[0][0], &diff[0], &centro_areografo_ee[0]);
+						matrix_vector_mult(Rbe, diff, centro_areografo_ee);
 						/*
 						if (state != 2) {
 							centro_areografo_ee[0] = 0.0;
@@ -960,11 +1118,16 @@ int main(int argc, char *argv[])
 							printf("END EFFECTOR VERO: %.3e  %.3e  %.3e\n", xyz_end[0], xyz_end[1], xyz_end[2]);
 							//printf("aerografo rispetto ad end effector: %.3e  %.3e  %.3e\n\n", centro_areografo_ee[0], centro_areografo_ee[1], centro_areografo_ee[2]);
 							printf("altezza mano sinistra:  %.3e\n", lefthandheight);
-							printf("error_Quat_EO: %.3e  %.3e  %.3e\n", errorQuat_EO[1], errorQuat_EO[2], errorQuat_EO[3]);
+							//printf("error_Quat_EO: %.3e  %.3e  %.3e\n", errorQuat_EO[1], errorQuat_EO[2], errorQuat_EO[3]);
 							printf("norma rotazione = %.3e ; rotation saturated = %d \n", temp_norm_rot, rot_sat);
-							printf("error_Quat: %.3e  %.3e  %.3e\n", errorQuat[1], errorQuat[2], errorQuat[3]);
+							//printf("error_Quat: %.3e  %.3e  %.3e\n", errorQuat[1], errorQuat[2], errorQuat[3]);
 							printf("tran_paused = %d; rot_paused = %d\n", tran_paused, rot_paused);
 							printf("possible_collision = %d\n", possible_collision);
+							printf("x_limit = %d;	y_limit = %d;	z_limit = %d;\n",x_limit,y_limit,z_limit);
+							printf("estremoDX bumper: (%.3e  %.3e  %.3e)\n", bump_dxH[0], bump_dxH[1], bump_dxH[2]);
+							printf("estremoSX bumper: (%.3e  %.3e  %.3e)\n", bump_sxH[0], bump_sxH[1], bump_sxH[2]);
+							for (int i = 0;i < 6;i++)	printf("joint %i: (%6.3f, %6.3f, %6.3f)\n", i + 1, joints[i][0], joints[i][1], joints[i][2]);
+							printf("dist tra bump_dxH e link base = %6.2f\n", dist);
                         }
 
                         for (axOpenIdx = 0; axOpenIdx < sx_sync.nAxOpen; axOpenIdx++)
@@ -1001,7 +1164,7 @@ int main(int argc, char *argv[])
                         // Send data to datalogger
                         datalog_msg msg;
                         msg.cmd = DATALOG_NONE;
-                        msg.numVar = 93;
+                        msg.numVar = 102;
                         msg.varVector[0] = t;
 
                         int k;
@@ -1016,7 +1179,9 @@ int main(int argc, char *argv[])
                             msg.varVector[37+k] = dqComauAxis_ref[k];
                             msg.varVector[43+k] = dqComauAxis_act[k];
 							
-							msg.varVector[ 78+k] = qComauJoint_motion[k];
+							msg.varVector[78+k] = qComauJoint_motion[k];
+							msg.varVector[96+k] = joints[k];
+
                         }
                         msg.varVector[49] = tool_vpose_sim.pos_x; //posa simulata dell'end effector
                         msg.varVector[50] = tool_vpose_sim.pos_y;
@@ -1056,6 +1221,10 @@ int main(int argc, char *argv[])
 						msg.varVector[90] = __CONTROL_GAIN_TRANS_DISPLACEMENT__;
 						msg.varVector[91] = __CONTROL_GAIN_ROT_DISPLACEMENT__;
 						msg.varVector[92] = possible_collision;
+						msg.varVector[93] = x_limit;
+						msg.varVector[94] = y_limit;
+						msg.varVector[95] = z_limit;
+
 
                         if (rt_mbx_send_if(mbx, &msg, sizeof(msg)) < 0)
                             printf("Error sending message to datalogger.\n");
