@@ -391,7 +391,7 @@ void* Comunicazione() {
 int main(int argc, char *argv[])
 {
 	const double dt = 0.002;
-	int k; int i;
+	int i, j, k;
 	int err;
 	int state = 0;
 	pthread_t thread;
@@ -738,7 +738,7 @@ int main(int argc, char *argv[])
                     if (isOpenControllerActive)
                     {
                         ///////////////////////////////////////////////////////////////////////////////////
-                        // Update variables
+                        // Update variables																 //
                         ///////////////////////////////////////////////////////////////////////////////////
 
                         t = (double)rt_get_time_ns()/1.0e9-t0;
@@ -814,7 +814,7 @@ int main(int argc, char *argv[])
                         ///////////////////////////////////////////////////////////////////////////////////
 
                         ///////////////////////////////////////////////////////////////////////////////////
-                        // Compute the robot motion - State Machine
+                        // Compute the robot motion - State Machine										 //
                         ///////////////////////////////////////////////////////////////////////////////////
 			
 						joint_vector dqComauJoint = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
@@ -912,7 +912,8 @@ int main(int argc, char *argv[])
 								contatore = contatore + 1;
 
 
-								/*// traiettoria sinusoidale
+								/*
+								// traiettoria sinusoidale
 								if (t<10)
 								{
 									transDisp[0] = transDisp[1] = transDisp[2] = 0.0;
@@ -942,65 +943,10 @@ int main(int argc, char *argv[])
 							}
 							//End state machine ********************************************************************************************
 
-
-							///////////////////////////////////////////////////////////////////////////////////
-							// Calculate the joint displacement												 //
-							///////////////////////////////////////////////////////////////////////////////////
-
-							joint_vector dJoint_motion;
-							if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
-								printf("Singularity in diffkinematics inversion.\n");
-								abnormal_behaviour = true;
-							}
-							else
-							{
-								int k;
-								for (k = 0; k < 6; k++)
-									qComauJoint_motion[k] += dJoint_motion[k];
-							}
-							// solo per la simulazione --> in questo modo riesco a vedere la simulazione, ma posso anche applicare i comandi al comau
-							/* if (inverse_diffkinematics_tool(qComauJoint_motion, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
-								printf("Singularity in diffkinematics inversion. \n");
-								abnormal_behaviour = true;
-							}
-							else {
-								int k;
-								for (k = 0; k < 6; k++)
-									qComauJoint_motion[k] += dJoint_motion[k];
-							} */
-
-							k = 0;
-
-							// Calcola il riferimento incrementale
-							for (k = 0; k < 6; k++)
-							{
-								dqComauJoint[k] = qComauJoint_motion[k] - qComauJoint_ref[k];
-							}
-							joint_to_axis_vel(dqComauJoint, dqComauAxis);
-
-
-
-
-							///////////////////////////////////////////////////////////////////////////////////
-							// Check the computed motion - SAFETY
-							///////////////////////////////////////////////////////////////////////////////////
-							
-							//reset flags
-							motion_OFF = false;
-							//collision_l2 = false;
-							//collision_l4 = false;
-							//possible_collision_floor = false;
-							lefthand_raised = false;
+							//Limiti end effector in terna W
 							x_limit = false;
 							y_limit = false;
 							z_limit = false;
-							trans_sat = false;
-							rot_sat = false;
-							
-							// Left hand height
-							if (lefthandheight > lefthand_tresh)	lefthand_raised = true;
-
-							//Limiti end effector in terna W
 							if ((tool_vpose.pos_x < 0.55) && (transDisp[0] < 0) || (tool_vpose.pos_x > 1.00) && (transDisp[0] > 0)) {
 								transDisp[0] = 0.0;
 								x_limit = true;
@@ -1015,6 +961,7 @@ int main(int argc, char *argv[])
 							}
 
 							//saturazione velocità massima traslazione
+							trans_sat = false;
 							temp_norm = vector_norm(transDisp);
 							if (temp_norm > __TRAN_MAX__) {
 								for (i = 0; i < 3; i++) transDisp[i] = transDisp[i] * (__TRAN_MAX__ / temp_norm);
@@ -1022,33 +969,64 @@ int main(int argc, char *argv[])
 							}
 
 							//saturazione massima velocità angolare
+							rot_sat = false;
 							temp_norm_rot = vector_norm(rotDisp);
 							if (temp_norm_rot > __ROT_MAX__) {
 								for (i = 0; i < 3; i++) rotDisp[i] = rotDisp[i] * (__ROT_MAX__ / temp_norm_rot);
 								rot_sat = true;
 							}
 
+
+							///////////////////////////////////////////////////////////////////////////////////
+							// Compute the joint displacement												 //
+							///////////////////////////////////////////////////////////////////////////////////
+
+							joint_vector dJoint_motion;
+							if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
+								printf("Singularity in diffkinematics inversion.\n");
+								abnormal_behaviour = true;
+							}
+							else
+							{
+								for (k = 0; k < 6; k++)
+									qComauJoint_motion[k] += dJoint_motion[k];
+							}
+							// solo per la simulazione --> in questo modo riesco a vedere la simulazione, ma posso anche applicare i comandi al comau
+							/* if (inverse_diffkinematics_tool(qComauJoint_motion, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
+								printf("Singularity in diffkinematics inversion. \n");
+								abnormal_behaviour = true;
+							}
+							else {
+								int k;
+								for (k = 0; k < 6; k++)
+									qComauJoint_motion[k] += dJoint_motion[k];
+							} */
+
+							
+							// Calcola il riferimento incrementale
+							for (k = 0; k < 6; k++)
+							{
+								dqComauJoint[k] = qComauJoint_motion[k] - qComauJoint_ref[k];
+							}
+							joint_to_axis_vel(dqComauJoint, dqComauAxis);
+
+							
+							///////////////////////////////////////////////////////////////////////////////////
+							// Check the computed motion - SAFETY
+							///////////////////////////////////////////////////////////////////////////////////
+							
+							//reset flags
+							//motion_OFF = false;
+							//collision_l2 = false;
+							//collision_l4 = false;
+							//possible_collision_floor = false;
+							lefthand_raised = false;
+							
+							// Left hand height
+							if (lefthandheight > lefthand_tresh)	lefthand_raised = true;
+
 							// alternative computation of forward kinematics
 							fkine(qComauJoint_act, joints);
-
-							//Controllo collisioni paraurti contro robot o suolo
-							/*pose_vector_mult(tool_mpose, bump_dxH_O, bump_dxH);
-							pose_vector_mult(tool_mpose, bump_dxL_O, bump_dxL);
-							pose_vector_mult(tool_mpose, bump_sxH_O, bump_sxH);
-							pose_vector_mult(tool_mpose, bump_sxL_O, bump_sxL);
-							pose_vector_mult(tool_mpose, bump_cenH_O, bump_cenH);
-							pose_vector_mult(tool_mpose, bump_cenL_O, bump_cenL);*/
-							//for (i = 0;i < 6 && !possible_collision && !possible_collision_floor; i++) {
-							//	pose_vector_mult(tool_mpose, bump_points_O[i], bump_points[i]);
-							//	distances[i][0] = obst_link_distance(bump_points[i], joints[0], joints[1]);
-							//	distances[i][1] = obst_link_distance(bump_points[i], joints[2], joints[3]);
-
-							//	//confronto con soglie sicurezza link
-							//	if (distances[i][0] < delta_safety || distances[i][1] < delta_safety) possible_collision = true;
-
-							//	//confronto altezza da suolo
-							//	if (bump_points[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
-							//}
 
 							//check soglie di sicurezza link parte alta e bassa paraurti
 							if(!possible_collision_floor && !collision_l2 && !collision_l4){
@@ -1070,7 +1048,7 @@ int main(int argc, char *argv[])
 									if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
 								}
 								//check soglie di sicurezza link parte destra e sinistra paraurti
-								for (i = 0;i < 5 && && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
+								for (i = 0;i < 5 && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
 									pose_vector_mult(tool_mpose, bump_dx_O[i], bump_dx[i]);
 									pose_vector_mult(tool_mpose, bump_sx_O[i], bump_sx[i]);
 									dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
@@ -1170,6 +1148,7 @@ int main(int argc, char *argv[])
 								// Resetta il riferimento incrementale --> ROBOT FERMO!
 								for (k = 0; k < 6; k++)
 								{
+									qComauJoint_motion[k] -= dJoint_motion[k];
 									dqComauJoint[k] = 0;
 								}
 								joint_to_axis_vel(dqComauJoint, dqComauAxis);
@@ -1244,12 +1223,11 @@ int main(int argc, char *argv[])
 							printf("norma rotazione = %.3e ; rotation saturated = %d \n", temp_norm_rot, rot_sat);
 							//printf("error_Quat: %.3e  %.3e  %.3e\n", errorQuat[1], errorQuat[2], errorQuat[3]);
 							printf("tran_paused = %d; rot_paused = %d\n", tran_paused, rot_paused);
-							printf("possible_collision = %d\n", possible_collision);
 							printf("x_limit = %d;	y_limit = %d;	z_limit = %d;\n",x_limit,y_limit,z_limit);
 							printf("estremoDX bumper: (%.3e  %.3e  %.3e)\n", bump_dxH[0], bump_dxH[1], bump_dxH[2]);
 							printf("estremoSX bumper: (%.3e  %.3e  %.3e)\n", bump_sxH[0], bump_sxH[1], bump_sxH[2]);
 							//for (i = 0;i < 6;i++)	printf("joint %i: (%6.3f, %6.3f, %6.3f)\n", i + 1, joints[i][0], joints[i][1], joints[i][2]);
-							printf("Collisione con links = %d;	collisione suolo = %d\n",possible_collision, possible_collision_floor);
+							printf("Collisione link2 = %d;	link4 = %d;	collisione suolo = %d\n",collision_l2, collision_l4, possible_collision_floor);
                         }
 
 						// Preparazione pacchetto da inviare a C4GOpen
@@ -1344,12 +1322,13 @@ int main(int argc, char *argv[])
 						msg.varVector[89] = errorQuat[3];
 						msg.varVector[90] = __CONTROL_GAIN_TRANS_DISPLACEMENT__;
 						msg.varVector[91] = __CONTROL_GAIN_ROT_DISPLACEMENT__;
-						msg.varVector[92] = possible_collision;
+						msg.varVector[92] = possible_collision_floor;
 						msg.varVector[93] = x_limit;
 						msg.varVector[94] = y_limit;
 						msg.varVector[95] = z_limit;
 						msg.varVector[96] = lefthand_raised;
-						msg.varVector[97] = possible_collision_floor;
+						msg.varVector[97] = collision_l2;
+						msg.varVector[98] = collision_l4;
 
 
                         if (rt_mbx_send_if(mbx, &msg, sizeof(msg)) < 0)
