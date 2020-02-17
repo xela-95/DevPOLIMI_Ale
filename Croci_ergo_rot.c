@@ -987,9 +987,9 @@ int main(int argc, char *argv[])
 							
 							//reset flags
 							motion_OFF = false;
-							collision_l2 = false;
-							collision_l4 = false;
-							possible_collision_floor = false;
+							//collision_l2 = false;
+							//collision_l4 = false;
+							//possible_collision_floor = false;
 							lefthand_raised = false;
 							x_limit = false;
 							y_limit = false;
@@ -1053,7 +1053,7 @@ int main(int argc, char *argv[])
 							//check soglie di sicurezza link parte alta e bassa paraurti
 							if(!possible_collision_floor && !collision_l2 && !collision_l4){
 								//controlla distanze
-								for (i = 0;i < 10 && !possible_collision && !possible_collision_floor; i++) {
+								for (i = 0;i < 10 && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
 									pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
 									pose_vector_mult(tool_mpose, bump_low_O[i], bump_low[i]);
 									dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
@@ -1070,7 +1070,7 @@ int main(int argc, char *argv[])
 									if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
 								}
 								//check soglie di sicurezza link parte destra e sinistra paraurti
-								for (i = 0;i < 5 && !possible_collision && !possible_collision_floor; i++) {
+								for (i = 0;i < 5 && && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
 									pose_vector_mult(tool_mpose, bump_dx_O[i], bump_dx[i]);
 									pose_vector_mult(tool_mpose, bump_sx_O[i], bump_sx[i]);
 									dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
@@ -1095,7 +1095,7 @@ int main(int argc, char *argv[])
 
 								//controllo se questa volta le distanze sono ammissibili!
 								
-								for (i = 0;i < 10 && !possible_collision && !possible_collision_floor; i++) {
+								for (i = 0;i < 10; i++) {
 									pose_vector_mult(tool_mpose_sim, bump_high_O[i], bump_high[i]);
 									pose_vector_mult(tool_mpose_sim, bump_low_O[i], bump_low[i]);
 									dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
@@ -1104,36 +1104,40 @@ int main(int argc, char *argv[])
 									dist_low[i][1] = obst_link_distance(bump_low[i], joints[2], joints[3]);
 
 									//confronto con soglie sicurezza link
-									if (dist_high[i][0] > delta_safety && dist_low[i][0] > delta_safety) collision_l2 = false;
+									if (dist_high[i][0] < delta_safety || dist_low[i][0] < delta_safety) break;
 
-									if (dist_high[i][1] > delta_safety && dist_low[i][1] > delta_safety) collision_l4 = false;
+									if (dist_high[i][1] < delta_safety || dist_low[i][1] < delta_safety) break;
 
 									//confronto altezza da suolo
-									if (bump_high[i][2] > 0.1 && bump_low[i][2] > 0.1)	possible_collision_floor = false; //10 [cm] di soglia
+									if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	break; //10 [cm] di soglia
 								}
+								
 								//check soglie di sicurezza link parte destra e sinistra paraurti
-								for (i = 0;i < 5 && !possible_collision && !possible_collision_floor; i++) {
-									pose_vector_mult(tool_mpose_sim, bump_dx_O[i], bump_dx[i]);
-									pose_vector_mult(tool_mpose_sim, bump_sx_O[i], bump_sx[i]);
-									dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
-									dist_dx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
-									dist_sx[i][0] = obst_link_distance(bump_sx[i], joints[0], joints[1]);
-									dist_sx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+								for (k = 0;k < 5; k++) {
+									pose_vector_mult(tool_mpose_sim, bump_dx_O[k], bump_dx[k]);
+									pose_vector_mult(tool_mpose_sim, bump_sx_O[k], bump_sx[k]);
+									dist_dx[k][0] = obst_link_distance(bump_dx[k], joints[0], joints[1]);
+									dist_dx[k][1] = obst_link_distance(bump_dx[k], joints[2], joints[3]);
+									dist_sx[k][0] = obst_link_distance(bump_sx[k], joints[0], joints[1]);
+									dist_sx[k][1] = obst_link_distance(bump_dx[k], joints[2], joints[3]);
 
 									//confronto con soglie sicurezza link
-									if (dist_dx[i][0] > delta_safety && dist_sx[i][0] > delta_safety) collision_l2 = false;
+									if (dist_dx[k][0] < delta_safety || dist_sx[k][0] < delta_safety) break;
 
-									if (dist_dx[i][1] > delta_safety && dist_sx[i][1] > delta_safety) collision_l4 = false;
+									if (dist_dx[k][1] < delta_safety || dist_sx[k][1] < delta_safety) break;
 
 									//confronto altezza da suolo
-									if (bump_dx[i][2] > 0.1 && bump_sx[i][2] > 0.1)	possible_collision_floor = false; //10 [cm] di soglia
+									if (bump_dx[k][2] < 0.1 || bump_sx[k][2] < 0.1)	break; //10 [cm] di soglia
+								}
+								//reset dei flag solo se TUTTI i punti rispettano i requisiti
+								if (i == 10 && k == 5) {
+									collision_l2 = false;
+									collision_l4 = false;
+									possible_collision_floor = false;
 								}
 
 							}
 							
-
-
-
 
 
 							//calcolo distanze tra ogni punto del bumper e i link comau (Link1 = giunti 0-1; Link2 = giunti 2-3)
@@ -1163,18 +1167,18 @@ int main(int argc, char *argv[])
 
 							// stops every movement of the robot
 							if (valid != 1 || lefthand_raised || collision_l2 || collision_l4 || possible_collision_floor) {
-								/*transDisp[0] = 0.0;
-								transDisp[1] = 0.0;
-								transDisp[2] = 0.0;
-								rotDisp[0] = 0.0;
-								rotDisp[1] = 0.0;
-								rotDisp[2] = 0.0;*/
 								// Resetta il riferimento incrementale --> ROBOT FERMO!
 								for (k = 0; k < 6; k++)
 								{
 									dqComauJoint[k] = 0;
 								}
 								joint_to_axis_vel(dqComauJoint, dqComauAxis);
+								/*transDisp[0] = 0.0;
+								transDisp[1] = 0.0;
+								transDisp[2] = 0.0;
+								rotDisp[0] = 0.0;
+								rotDisp[1] = 0.0;
+								rotDisp[2] = 0.0;*/
 							}
 						}
 
