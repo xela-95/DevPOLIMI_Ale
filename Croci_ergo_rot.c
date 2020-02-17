@@ -402,7 +402,7 @@ int main(int argc, char *argv[])
 		printf("\n Thread created successfully\n");
 
     // Offset tool
-    double z_tool = 0.19;//0.021; //non c'è più la pallina
+    double z_tool = 0.19 + 0.05;//sostegno (disco bianco + parte nera) + spessore paraurti
     double x_tool = 0.0; 
    
     // Posa end effector nello spazio operativo
@@ -466,7 +466,7 @@ int main(int argc, char *argv[])
 	translation_vector joints[6]; //posizioni dei giunti nello spazio
 	double dist[2]; //distanza ostacolo da Link1 e Link2
 	double lefthand_tresh = 1.5; // threshold in [m]
-	bool possible_collision = false; // flag per probabile collisione con link robot
+	bool collision_l2 = false, collision_l4 = false; // flag per probabile collisione con link 2 e 4
 	bool possible_collision_floor = false; //collisione paraurti suolo
 	bool x_limit = false, y_limit = false, z_limit = false; //flag limiti massimi workspace raggiunti
 	bool lefthand_raised = false; //flag per segnalare mano alzata sopra threshold
@@ -479,7 +479,7 @@ int main(int argc, char *argv[])
 		{bump_height, bump_length, -bump_depth},//sx basso
 		{-bump_height, 0, -bump_depth}, //centro alto
 		{bump_height, 0, -bump_depth} }; //centro basso
-	double distances[6][2]; //matrice di distanze di ogni punto del bumper dai link 1 e 2
+	double distances[6][2]; //matrice di distanze di ogni punto del bumper dai link 2 e 4
 	translation_vector bump_high_O[10], bump_low_O[10], bump_dx_O[5], bump_sx_O[5]; //vettori che rappresentano i 4 bordi del paraurti in terna O
 	translation_vector bump_high[10], bump_low[10], bump_dx[5], bump_sx[5]; //terna W
 	double dist_high[10][2], dist_low[10][2], dist_dx[5][2], dist_sx[5][2];
@@ -942,13 +942,53 @@ int main(int argc, char *argv[])
 							}
 							//End state machine ********************************************************************************************
 
+
+							///////////////////////////////////////////////////////////////////////////////////
+							// Calculate the joint displacement												 //
+							///////////////////////////////////////////////////////////////////////////////////
+
+							joint_vector dJoint_motion;
+							if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
+								printf("Singularity in diffkinematics inversion.\n");
+								abnormal_behaviour = true;
+							}
+							else
+							{
+								int k;
+								for (k = 0; k < 6; k++)
+									qComauJoint_motion[k] += dJoint_motion[k];
+							}
+							// solo per la simulazione --> in questo modo riesco a vedere la simulazione, ma posso anche applicare i comandi al comau
+							/* if (inverse_diffkinematics_tool(qComauJoint_motion, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
+								printf("Singularity in diffkinematics inversion. \n");
+								abnormal_behaviour = true;
+							}
+							else {
+								int k;
+								for (k = 0; k < 6; k++)
+									qComauJoint_motion[k] += dJoint_motion[k];
+							} */
+
+							k = 0;
+
+							// Calcola il riferimento incrementale
+							for (k = 0; k < 6; k++)
+							{
+								dqComauJoint[k] = qComauJoint_motion[k] - qComauJoint_ref[k];
+							}
+							joint_to_axis_vel(dqComauJoint, dqComauAxis);
+
+
+
+
 							///////////////////////////////////////////////////////////////////////////////////
 							// Check the computed motion - SAFETY
 							///////////////////////////////////////////////////////////////////////////////////
 							
 							//reset flags
 							motion_OFF = false;
-							possible_collision = false;
+							collision_l2 = false;
+							collision_l4 = false;
 							possible_collision_floor = false;
 							lefthand_raised = false;
 							x_limit = false;
@@ -1011,35 +1051,90 @@ int main(int argc, char *argv[])
 							//}
 
 							//check soglie di sicurezza link parte alta e bassa paraurti
-							for (i = 0;i < 10 && !possible_collision && !possible_collision_floor; i++) {
-								pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
-								pose_vector_mult(tool_mpose, bump_low_O[i], bump_low[i]);
-								dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
-								dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
-								dist_low[i][0] = obst_link_distance(bump_low[i], joints[0], joints[1]);
-								dist_low[i][1] = obst_link_distance(bump_low[i], joints[2], joints[3]);
+							if(!possible_collision_floor && !collision_l2 && !collision_l4){
+								//controlla distanze
+								for (i = 0;i < 10 && !possible_collision && !possible_collision_floor; i++) {
+									pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
+									pose_vector_mult(tool_mpose, bump_low_O[i], bump_low[i]);
+									dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
+									dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
+									dist_low[i][0] = obst_link_distance(bump_low[i], joints[0], joints[1]);
+									dist_low[i][1] = obst_link_distance(bump_low[i], joints[2], joints[3]);
 
-								//confronto con soglie sicurezza link
-								if (dist_high[i][0] < delta_safety || dist_high[i][1] < delta_safety || dist_low[i][0] < delta_safety || dist_low[i][1] < delta_safety) possible_collision = true;
+									//confronto con soglie sicurezza link
+									if (dist_high[i][0] < delta_safety || dist_low[i][0] < delta_safety ) collision_l2 = true;
 
-								//confronto altezza da suolo
-								if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+									if (dist_high[i][1] < delta_safety || dist_low[i][1] < delta_safety) collision_l4 = true;
+
+									//confronto altezza da suolo
+									if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+								}
+								//check soglie di sicurezza link parte destra e sinistra paraurti
+								for (i = 0;i < 5 && !possible_collision && !possible_collision_floor; i++) {
+									pose_vector_mult(tool_mpose, bump_dx_O[i], bump_dx[i]);
+									pose_vector_mult(tool_mpose, bump_sx_O[i], bump_sx[i]);
+									dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
+									dist_dx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+									dist_sx[i][0] = obst_link_distance(bump_sx[i], joints[0], joints[1]);
+									dist_sx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+
+									//confronto con soglie sicurezza link
+									if (dist_dx[i][0] < delta_safety || dist_sx[i][0] < delta_safety) collision_l2 = true;
+
+									if (dist_dx[i][1] < delta_safety || dist_sx[i][1] < delta_safety) collision_l4 = true;
+
+									//confronto altezza da suolo
+									if (bump_dx[i][2] < 0.1 || bump_sx[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+								}
 							}
-							//check soglie di sicurezza link parte destra e sinistra paraurti
-							for (i = 0;i < 5 && !possible_collision && !possible_collision_floor; i++) {
-								pose_vector_mult(tool_mpose, bump_dx_O[i], bump_dx[i]);
-								pose_vector_mult(tool_mpose, bump_sx_O[i], bump_sx[i]);
-								dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
-								dist_dx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
-								dist_sx[i][0] = obst_link_distance(bump_sx[i], joints[0], joints[1]);
-								dist_sx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+							else { //calcola movimento simulato e decide se far muovere il robot
+								
+								//calcolo cinematica diretta con lo spostamento potenziale di questa iterazione
+								forward_kinematics_tool(qComauJoint_motion, x_tool, z_tool, tool_mpose_sim);
+								pose_mat2vect_eulZYZ(&tool_vpose_sim, tool_mpose_sim);
 
-								//confronto con soglie sicurezza link
-								if (dist_dx[i][0] < delta_safety || dist_dx[i][1] < delta_safety || dist_sx[i][0] < delta_safety || dist_sx[i][1] < delta_safety) possible_collision = true;
+								//controllo se questa volta le distanze sono ammissibili!
+								
+								for (i = 0;i < 10 && !possible_collision && !possible_collision_floor; i++) {
+									pose_vector_mult(tool_mpose_sim, bump_high_O[i], bump_high[i]);
+									pose_vector_mult(tool_mpose_sim, bump_low_O[i], bump_low[i]);
+									dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
+									dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
+									dist_low[i][0] = obst_link_distance(bump_low[i], joints[0], joints[1]);
+									dist_low[i][1] = obst_link_distance(bump_low[i], joints[2], joints[3]);
 
-								//confronto altezza da suolo
-								if (bump_dx[i][2] < 0.1 || bump_sx[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+									//confronto con soglie sicurezza link
+									if (dist_high[i][0] > delta_safety && dist_low[i][0] > delta_safety) collision_l2 = false;
+
+									if (dist_high[i][1] > delta_safety && dist_low[i][1] > delta_safety) collision_l4 = false;
+
+									//confronto altezza da suolo
+									if (bump_high[i][2] > 0.1 && bump_low[i][2] > 0.1)	possible_collision_floor = false; //10 [cm] di soglia
+								}
+								//check soglie di sicurezza link parte destra e sinistra paraurti
+								for (i = 0;i < 5 && !possible_collision && !possible_collision_floor; i++) {
+									pose_vector_mult(tool_mpose_sim, bump_dx_O[i], bump_dx[i]);
+									pose_vector_mult(tool_mpose_sim, bump_sx_O[i], bump_sx[i]);
+									dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
+									dist_dx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+									dist_sx[i][0] = obst_link_distance(bump_sx[i], joints[0], joints[1]);
+									dist_sx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+
+									//confronto con soglie sicurezza link
+									if (dist_dx[i][0] > delta_safety && dist_sx[i][0] > delta_safety) collision_l2 = false;
+
+									if (dist_dx[i][1] > delta_safety && dist_sx[i][1] > delta_safety) collision_l4 = false;
+
+									//confronto altezza da suolo
+									if (bump_dx[i][2] > 0.1 && bump_sx[i][2] > 0.1)	possible_collision_floor = false; //10 [cm] di soglia
+								}
+
 							}
+							
+
+
+
+
 
 							//calcolo distanze tra ogni punto del bumper e i link comau (Link1 = giunti 0-1; Link2 = giunti 2-3)
 							/*dist[0] = obst_link_distance(bump_dxH, joints[0], joints[1]);
@@ -1067,52 +1162,27 @@ int main(int argc, char *argv[])
 							*/
 
 							// stops every movement of the robot
-							if (valid != 1 || lefthand_raised || possible_collision || possible_collision_floor) {
-								transDisp[0] = 0.0;
+							if (valid != 1 || lefthand_raised || collision_l2 || collision_l4 || possible_collision_floor) {
+								/*transDisp[0] = 0.0;
 								transDisp[1] = 0.0;
 								transDisp[2] = 0.0;
 								rotDisp[0] = 0.0;
 								rotDisp[1] = 0.0;
-								rotDisp[2] = 0.0;
+								rotDisp[2] = 0.0;*/
+								// Resetta il riferimento incrementale --> ROBOT FERMO!
+								for (k = 0; k < 6; k++)
+								{
+									dqComauJoint[k] = 0;
+								}
+								joint_to_axis_vel(dqComauJoint, dqComauAxis);
 							}
 						}
 
+
+
 						///////////////////////////////////////////////////////////////////////////////////
-						// Calculate the joint displacement - Prepare Packet - Print e Log info
+						// Prepare Packet - Print info and data Log 									 //
 						///////////////////////////////////////////////////////////////////////////////////
-
-                        joint_vector dJoint_motion;
-                        if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_motion, transDisp, rotDisp, 0.0, z_tool)<0){
-                            printf("Singularity in diffkinematics inversion.\n");
-                            abnormal_behaviour = true;
-                        }
-                        else
-                        {
-                            int k;
-                            for (k=0; k<6; k++)
-                                 qComauJoint_motion[k] += dJoint_motion[k];
-                        }
-                        // solo per la simulazione --> in questo modo riesco a vedere la simulazione, ma posso anche applicare i comandi al comau
-						/* if (inverse_diffkinematics_tool(qComauJoint_motion, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
-							printf("Singularity in diffkinematics inversion. \n");
-							abnormal_behaviour = true;
-						}
-						else {
-							int k;
-							for (k = 0; k < 6; k++)
-								qComauJoint_motion[k] += dJoint_motion[k];
-						} */
-                      
-                        k = 0;
-
-                        // Calcola il riferimento incrementale
-                        for (k=0; k<6; k++)
-                        {
-                             dqComauJoint[k] = qComauJoint_motion[k] - qComauJoint_ref[k];
-                        }
-                        joint_to_axis_vel(dqComauJoint, dqComauAxis);
-
-
 
 						//Manipolazione dati solo per print e datalog (non utili ai fini dell'algo)
 						// Lettura cinematica diretta
