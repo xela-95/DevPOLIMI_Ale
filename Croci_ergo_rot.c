@@ -247,7 +247,23 @@ double obst_link_distance(const translation_vector p_obs, const translation_vect
 	//print_vector(p_s);
 	return vector_norm(p_obs_s);
 }
+//campiona n punti equi-spaziati nel segmento compreso tra p1 e p2. points deve avere dimensione (n+2)
+void samplePoints(const translation_vector p1, const translation_vector p2, unsigned int n, translation_vector points[]) {
+	double s = 0, step;
+	int i;
+	memset(&(points[0]), 0, 3 * (n + 2) * sizeof(double));
+	translation_vector p_21, p_s21;
+	vector_diff(p2, p1, p_21); // (p2-p1)
 
+
+	step = (double)1 / (n + 1);
+
+	for (i = 0;i < n + 2;i++) {
+		scalar_vect_mult(s, p_21, p_s21);// s*(p2-p1)
+		vector_sum(p1, p_s21, points[i]);// p1 + s*(p2-p1)
+		s += step;
+	}
+}
 
 
 typedef double quaternion_vec[4];
@@ -446,7 +462,6 @@ int main(int argc, char *argv[])
 	translation_vector bump_cenH_O = {-bump_height, 0, -bump_depth};
 	translation_vector bump_cenL_O = {bump_height, 0, -bump_depth};
 	translation_vector bump_dxH, bump_dxL, bump_sxH, bump_sxL, bump_cenH, bump_cenL;
-	double safety_cil_radius = 0.1; // raggio cilindro [m] che avvolge i link del robot per sicurezza
 	double delta_safety = 0.10; // raggio cilindro [m] che avvolge i link del robot per sicurezza
 	translation_vector joints[6]; //posizioni dei giunti nello spazio
 	double dist[2]; //distanza ostacolo da Link1 e Link2
@@ -456,9 +471,25 @@ int main(int argc, char *argv[])
 	bool x_limit = false, y_limit = false, z_limit = false; //flag limiti massimi workspace raggiunti
 	bool lefthand_raised = false; //flag per segnalare mano alzata sopra threshold
 	bool motion_OFF = false; //disabilita ogni movimento
-	translation_vector bump_points[6], bump_points_O[6]; //array di vettori posizione del paraurti
-	bump_points_O = { bump_dxH_O, bump_dxL_O, bump_sxH_O, bump_sxL_O, bump_cenH_O,bump_cenL_O };
+	translation_vector bump_points[6];
+	translation_vector bump_points_O[6]={//array di vettori posizione del paraurti 
+		{-bump_height, -bump_length, -bump_depth},//dx alto
+		{bump_height, -bump_length, -bump_depth},//dx basso
+		{-bump_height, bump_length, -bump_depth}, //sx alto
+		{bump_height, bump_length, -bump_depth},//sx basso
+		{-bump_height, 0, -bump_depth}, //centro alto
+		{bump_height, 0, -bump_depth} }; //centro basso
 	double distances[6][2]; //matrice di distanze di ogni punto del bumper dai link 1 e 2
+	translation_vector bump_high_O[10], bump_low_O[10], bump_dx_O[5], bump_sx_O[5]; //vettori che rappresentano i 4 bordi del paraurti in terna O
+	translation_vector bump_high[10], bump_low[10], bump_dx[5], bump_sx[5]; //terna W
+	double dist_high[10][2], dist_low[10][2], dist_dx[5][2], dist_sx[5][2];
+	samplePoints(bump_dxH_O, bump_sxH_O, 8, bump_high_O); //campionamento dei punti lungo il paraurti
+	samplePoints(bump_dxL_O, bump_sxL_O, 8, bump_low_O);
+	samplePoints(bump_dxH_O, bump_dxL_O, 3, bump_dx_O);
+	samplePoints(bump_sxH_O, bump_sxL_O, 3, bump_sx_O);
+
+
+
 
     // Rx and Tx packets initialization
     MVSW_DATA_PC  sx_C4GOpen_Packet_Rx;
@@ -821,11 +852,11 @@ int main(int argc, char *argv[])
 								//controllo su vicinananza end effector - posa ergonomica
 								if (fabs(humanErgoPoseT[0] - tool_vpose.pos_x) < 0.05) transDisp[0] = 0.0;
 								if (fabs(humanErgoPoseT[1] - tool_vpose.pos_y) < 0.05) transDisp[1] = 0.0;
-								if (fabs(humanErgoPoseT[2] - (tool_vpose.pos_z + z_tool)) < 0.05) transDisp[2] = 0.0;
+								if (fabs(humanErgoPoseT[2] - (tool_vpose.pos_z)) < 0.05) transDisp[2] = 0.0;
 
 								if ((fabs(humanErgoPoseT[0] - tool_vpose.pos_x) < 0.05) &&
 									(fabs(humanErgoPoseT[1] - tool_vpose.pos_y) < 0.05) &&
-									(fabs(humanErgoPoseT[2] - (tool_vpose.pos_z + z_tool)) < 0.05) &&
+									(fabs(humanErgoPoseT[2] - (tool_vpose.pos_z)) < 0.05) &&
 									fabs(errorQuat_EO[1]) < 0.05 && fabs(errorQuat_EO[2]) < 0.05 && fabs(errorQuat_EO[3]) < 0.05) 
 								{
 									state = 1;
@@ -914,6 +945,7 @@ int main(int argc, char *argv[])
 							///////////////////////////////////////////////////////////////////////////////////
 							// Check the computed motion - SAFETY
 							///////////////////////////////////////////////////////////////////////////////////
+							
 							//reset flags
 							motion_OFF = false;
 							possible_collision = false;
@@ -937,7 +969,7 @@ int main(int argc, char *argv[])
 								transDisp[1] = 0.0;
 								y_limit = true;
 							}
-							if ((tool_vpose.pos_z+z_tool < bump_length) && (transDisp[2] < 0) || (tool_vpose.pos_z+z_tool > 1.30) && (transDisp[2] > 0)) {
+							if ((tool_vpose.pos_z < bump_length) && (transDisp[2] < 0) || (tool_vpose.pos_z > 1.40) && (transDisp[2] > 0)) {
 								transDisp[2] = 0.0;
 								z_limit = true;
 							}
@@ -966,16 +998,47 @@ int main(int argc, char *argv[])
 							pose_vector_mult(tool_mpose, bump_sxL_O, bump_sxL);
 							pose_vector_mult(tool_mpose, bump_cenH_O, bump_cenH);
 							pose_vector_mult(tool_mpose, bump_cenL_O, bump_cenL);*/
-							for (i = 0;i < 6 && !possible_collision && !possible_collision_floor; i++) {
-								pose_vector_mult(tool_mpose, bump_points_O[i], bump_points[i]);
-								dist[i][0] = obst_link_distance(bump_points[i], joints[0], joints[1]);
-								dist[i][1] = obst_link_distance(bump_points[i], joints[2], joints[3]);
+							//for (i = 0;i < 6 && !possible_collision && !possible_collision_floor; i++) {
+							//	pose_vector_mult(tool_mpose, bump_points_O[i], bump_points[i]);
+							//	distances[i][0] = obst_link_distance(bump_points[i], joints[0], joints[1]);
+							//	distances[i][1] = obst_link_distance(bump_points[i], joints[2], joints[3]);
+
+							//	//confronto con soglie sicurezza link
+							//	if (distances[i][0] < delta_safety || distances[i][1] < delta_safety) possible_collision = true;
+
+							//	//confronto altezza da suolo
+							//	if (bump_points[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+							//}
+
+							//check soglie di sicurezza link parte alta e bassa paraurti
+							for (i = 0;i < 10 && !possible_collision && !possible_collision_floor; i++) {
+								pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
+								pose_vector_mult(tool_mpose, bump_low_O[i], bump_low[i]);
+								dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
+								dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
+								dist_low[i][0] = obst_link_distance(bump_low[i], joints[0], joints[1]);
+								dist_low[i][1] = obst_link_distance(bump_low[i], joints[2], joints[3]);
 
 								//confronto con soglie sicurezza link
-								if (dist[i][0] < delta_safety || dist[i][1] < delta_safety) possible_collision = true;
+								if (dist_high[i][0] < delta_safety || dist_high[i][1] < delta_safety || dist_low[i][0] < delta_safety || dist_low[i][1] < delta_safety) possible_collision = true;
 
 								//confronto altezza da suolo
-								if (bump_points[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+								if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
+							}
+							//check soglie di sicurezza link parte destra e sinistra paraurti
+							for (i = 0;i < 5 && !possible_collision && !possible_collision_floor; i++) {
+								pose_vector_mult(tool_mpose, bump_dx_O[i], bump_dx[i]);
+								pose_vector_mult(tool_mpose, bump_sx_O[i], bump_sx[i]);
+								dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
+								dist_dx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+								dist_sx[i][0] = obst_link_distance(bump_sx[i], joints[0], joints[1]);
+								dist_sx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
+
+								//confronto con soglie sicurezza link
+								if (dist_dx[i][0] < delta_safety || dist_dx[i][1] < delta_safety || dist_sx[i][0] < delta_safety || dist_sx[i][1] < delta_safety) possible_collision = true;
+
+								//confronto altezza da suolo
+								if (bump_dx[i][2] < 0.1 || bump_sx[i][2] < 0.1)	possible_collision_floor = true; //10 [cm] di soglia
 							}
 
 							//calcolo distanze tra ogni punto del bumper e i link comau (Link1 = giunti 0-1; Link2 = giunti 2-3)
@@ -1004,7 +1067,7 @@ int main(int argc, char *argv[])
 							*/
 
 							// stops every movement of the robot
-							if (valid != 1 || lefthand_raised || possible_collision) {
+							if (valid != 1 || lefthand_raised || possible_collision || possible_collision_floor) {
 								transDisp[0] = 0.0;
 								transDisp[1] = 0.0;
 								transDisp[2] = 0.0;
