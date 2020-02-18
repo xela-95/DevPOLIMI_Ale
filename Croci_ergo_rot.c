@@ -435,6 +435,16 @@ int main(int argc, char *argv[])
 	quaternion_vec errorQuat; 		//quaternione errore di orientamento EH
 	orientation_matrix humanToolPoseR_T, errorR; //trasposta R_H e matrice errore orientamento EH
 	
+	//dati per validazione con traiettoria sinusoidale
+	double t_al = 1.5; //tempo di accelerazione
+	double vel_l, acc_l;
+	double t_inizl = t_lift, Tl = 15;
+	double dir_vel_l[3] = { 0.0 ,0.0, 1 };
+	vel_l = 0.005;
+	acc_l = vel_l / t_al;
+	double freq = 0.10; //frequenza velocità profilo sinusoidale
+	
+	
 	//Aggiunti da Ale
 	double temp_norm_rot; //norma omega [rad/s]
 	double temp_norm;	  //norma v [m/s]
@@ -487,7 +497,8 @@ int main(int argc, char *argv[])
 	samplePoints(bump_dxL_O, bump_sxL_O, 8, bump_low_O);
 	samplePoints(bump_dxH_O, bump_dxL_O, 3, bump_dx_O);
 	samplePoints(bump_sxH_O, bump_sxL_O, 3, bump_sx_O);
-
+	int cont_mano = 0; //contatore dei cicli consecutivi con mano sollevata
+	int cont_mano_th = 5000; //soglia in cui passare a stato 3 (idle)
 
 
 
@@ -876,28 +887,19 @@ int main(int argc, char *argv[])
 							}
 							else if (state == 2) {		// computing control law (robot ee velocities)
 
-								double t_al = 1.5; //tempo di accelerazione
-								double vel_l, acc_l;
-								double t_inizl = t_lift, Tl = 15;
-								double dir_vel_l[3] = { 0.0 ,0.0, 1 };
-
-								vel_l = 0.005;
-								acc_l = vel_l / t_al;
-								double freq = 0.10; //frequenza velocità profilo sinusoidale
-
-								i = 0;
+								if(cont_mano > cont_mano_th)	state = 3; //se ho tenuto la mano alzata per 10s vado in stato idle
 
 								//soft start
 								/*if (contatore < 2000) kappa = 0.0005*contatore;
 								else kappa = 1;*/
 
-								//controllo traslazione
-								//for (i = 0; i < 3; i++) transDisp[i] = __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[i] - humanToolPoseT[i])*dt; // Vrob = KRv*(Perg - Phum);
-								transDisp[0] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[0] - humanToolPoseT[0]) * dt;
-								transDisp[1] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[1] - humanToolPoseT[1]) * dt;
-								transDisp[2] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[2] - humanToolPoseT[2]) * dt;
+								//controllo traslazione: Vrob = KRv*(Perg - Phum);
+								for (i = 0; i < 3; i++) transDisp[i] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[i] - humanToolPoseT[i]) * dt; 
+								//transDisp[0] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[0] - humanToolPoseT[0]) * dt;
+								//transDisp[1] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[1] - humanToolPoseT[1]) * dt;
+								//transDisp[2] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[2] - humanToolPoseT[2]) * dt;
 
-								//Controllo rotazionale
+								//Controllo rotazionale: Wrob = KRw*errorQuat(2:end)';
 								matrix_transpose(humanToolPoseR, humanToolPoseR_T);// è la trasposta della matrice di orientamento del tool frame rispetto al world frame
 								matrix_matrix_mult(humanErgoPoseR, humanToolPoseR_T, errorR); // errorR = Rerg*Rhum';
 								get_quaternion(errorR, &errorQuat[0]); // errorQuat = rotm2quat(errorR);
@@ -905,8 +907,8 @@ int main(int argc, char *argv[])
 								//test errore di orientamento trasposto!
 								//matrix_transpose(&errorR[0][0], &errorR_T[0][0]);
 								//get_quaternion(&errorR_T[0][0], &errorQuat[0]);
-
-								for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__ * errorQuat[i + 1] * dt; // Wrob = KRw*errorQuat(2:end)';*/
+								
+								for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__ * errorQuat[i + 1] * dt; 
 
 								//update contatore mod 5
 								contatore = contatore + 1;
@@ -1020,10 +1022,18 @@ int main(int argc, char *argv[])
 							//collision_l2 = false;
 							//collision_l4 = false;
 							//possible_collision_floor = false;
-							lefthand_raised = false;
+							//lefthand_raised = false;
 							
 							// Left hand height
-							if (lefthandheight > lefthand_tresh)	lefthand_raised = true;
+														
+							if(lefthandheight > lefthand_tresh){
+								cont_mano++;
+								lefthand_raised = true;
+								
+							}else{
+								cont_mano = 0;
+								lefthand_raised = false;
+							}
 
 							// alternative computation of forward kinematics
 							fkine(qComauJoint_act, joints);
