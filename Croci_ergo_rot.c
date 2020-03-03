@@ -180,7 +180,7 @@ void fkine(joint_vector const q, translation_vector joints[]) {
 	memset(&(joints[0]), 0, 3 * 6 * sizeof(double));
 	joint_vector q_DH;
 	pose_matrix A01, A02, A03, A04, A05, A06, A12, A23, A34, A45, A56;
-	double offset_tool = 0.041;//0.19; //offset lunghezza tool lungo z ee [m]
+	double offset_tool = 0.20;//0.041;//offset lunghezza tool lungo z ee [m]
 
 	//calcolo coord giunto con convenzione comau
 	q_DH[0] = -1 * q[0];
@@ -264,7 +264,7 @@ void samplePoints(const translation_vector p1, const translation_vector p2, unsi
 		s += step;
 	}
 }
-//convert a rotation matrix into the correspondent euler angles XYZ
+//convert a rotation matrix into the correspondent euler angles XYZ in [°]
 void rotm2eulXYZ(const orientation_matrix R, double eul[3]) {
 	memset(&(eul[0]), 0, 3 * sizeof(double));
 	eul[0] = atan2(-R[1][2], R[2][2]) * 180 / M_PI; //roll
@@ -397,7 +397,7 @@ int main(int argc, char *argv[])
 {
 	joint_vector dJoint_motion;
 	const double dt = 0.002;
-	int i, j, k;
+	int i, j, k, m;
 	int err;
 	int state = 0;
 	pthread_t thread;
@@ -467,11 +467,11 @@ int main(int argc, char *argv[])
 	double k_soft = 0; 					// variabile soft control
 	bool soft_start = false;			// flag che indica che va fatto il soft control
 	const double tresh_position = 0.1;	// thresold for the norm of the error to shut down the control [m]
-	const double tresh_rotation = 0.; 	// threshold for norm of orientation error [rad] --> 10°
+	const double tresh_rotation = 5; 	// threshold for norm of orientation error [°]
 	bool tran_paused = false, rot_paused = false;
 	double bump_length = 0.88;	//sono tutte semi-distanze! (hp: paraurti montato centralmente)
 	double bump_height = 0.25;
-	double bump_depth = 0.15;
+	double bump_depth = 0.20;
 	translation_vector bump_dxH_O = {-bump_height, -bump_length, -bump_depth}; //relative a terna O
 	translation_vector bump_dxL_O = {bump_height, -bump_length, -bump_depth};
 	translation_vector bump_sxH_O = {-bump_height, bump_length, -bump_depth};
@@ -479,7 +479,7 @@ int main(int argc, char *argv[])
 	translation_vector bump_cenH_O = {-bump_height, 0, -bump_depth};
 	translation_vector bump_cenL_O = {bump_height, 0, -bump_depth};
 	translation_vector bump_dxH, bump_dxL, bump_sxH, bump_sxL, bump_cenH, bump_cenL;
-	double delta_safety = 0.15; // raggio cilindro [m] che avvolge i link del robot per sicurezza
+	double delta_safety = 0.20; // raggio del cilindro [m] che avvolge i link del robot per sicurezza
 	translation_vector joints[6]; //posizioni dei giunti nello spazio
 	translation_vector joints_sim[6];//simulate per algo safety
 	double lefthand_tresh = 1.5; // threshold in [m]
@@ -509,11 +509,17 @@ int main(int argc, char *argv[])
 	int cont_mano = 0; //contatore dei cicli consecutivi con mano sollevata
 	int cont_mano_th = 5000; //soglia in cui passare a stato 3 (idle)
 	orientation_matrix R_init = {{0.8312, 0, 0.5560},{0,1,0},{-0.5560, 0, 0.8312}};//initial orientation for state 0
-	double eul[3];
+	double eul[3];//angoli di eulero XYZ riferiti a orientamento R_O rispetto a R_init
+	double eul_EH[3];//angoli di eulero XYZ riferiti a orientamento R_EH
 	joint_vector q_sim; //variabili di giunto simulate per safety collisioni
 	joint_vector dJoint_sim; //incremento di giunto simulato
+	double minDist = delta_safety;//distanza minima per uscire da stato collisione
+	double point_coll[2];//vettore che indica quale parte del paraurti[0] e quale punto di quella parte[1] sono quelli in collisione
+	int ind;
+	bool no_coll=true;
+	translation_vector r_EH;
 	
-
+	
     // Rx and Tx packets initialization
     MVSW_DATA_PC  sx_C4GOpen_Packet_Rx;
     MVSW_DATA_PC  sx_C4GOpen_Packet_Tx;
@@ -887,9 +893,9 @@ int main(int argc, char *argv[])
 								//if (fabs(humanErgoPoseT[1] - tool_vpose.pos_y) < 0.05) transDisp[1] = 0.0;
 								//if (fabs(humanErgoPoseT[2] - (tool_vpose.pos_z)) < 0.05) transDisp[2] = 0.0;
 
-								if ((fabs(humanErgoPoseT[0] - tool_vpose.pos_x) < 0.05) &&
-									(fabs(humanErgoPoseT[1] - tool_vpose.pos_y) < 0.05) &&
-									(fabs(humanErgoPoseT[2] - (tool_vpose.pos_z)) < 0.05) &&
+								if ((fabs(humanErgoPoseT[0] - tool_vpose.pos_x) < 0.10) &&
+									(fabs(humanErgoPoseT[1] - tool_vpose.pos_y) < 0.10) &&
+									(fabs(humanErgoPoseT[2] - (tool_vpose.pos_z)) < 0.10) &&
 									fabs(eul[0]) < 5 && fabs(eul[1]) < 5 && fabs(eul[2]) < 5)
 								{
 									state = 1;
@@ -1077,131 +1083,122 @@ int main(int argc, char *argv[])
 							
 							
 							//check soglie di sicurezza link parte alta e bassa paraurti
-							if(!possible_collision_floor && !collision_l2 && !collision_l4){
+							if(state==2 && !possible_collision_floor && !collision_l2 && !collision_l4){
 								// alternative computation of forward kinematics
 								fkine(qComauJoint_act, joints);
 								
 								//controlla distanze
 								for (i = 0;i < 10 && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
 									pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
-									pose_vector_mult(tool_mpose, bump_low_O[i], bump_low[i]);
 									dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
 									dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
-									dist_low[i][0] = obst_link_distance(bump_low[i], joints[0], joints[1]);
-									dist_low[i][1] = obst_link_distance(bump_low[i], joints[2], joints[3]);
-
 									//confronto con soglie sicurezza link
-									if (dist_high[i][0] < delta_safety) collision_l2 = true;
-									if (dist_low[i][0] < delta_safety) collision_l2 = true;
-
-									if (dist_high[i][1] < delta_safety) collision_l4 = true;
-									if (dist_low[i][1] < delta_safety) collision_l4 = true;
-
+									if (dist_high[i][0] < delta_safety){ collision_l2 = true;  point_coll[0]=0;point_coll[1]=i;minDist=dist_high[i][0];}
+									if (dist_high[i][1] < delta_safety){ collision_l4 = true;  point_coll[0]=0;point_coll[1]=i;minDist=dist_high[i][1];}							
+									
 									//confronto altezza da suolo
 									//if (bump_high[i][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
 									//if (bump_low[i][2] < 0.1){possible_collision_floor = true;}	
 								}
-								//check soglie di sicurezza link parte destra e sinistra paraurti
-								for (i = 0;i < 5 && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
-									pose_vector_mult(tool_mpose, bump_dx_O[i], bump_dx[i]);
-									pose_vector_mult(tool_mpose, bump_sx_O[i], bump_sx[i]);
-									dist_dx[i][0] = obst_link_distance(bump_dx[i], joints[0], joints[1]);
-									dist_dx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
-									dist_sx[i][0] = obst_link_distance(bump_sx[i], joints[0], joints[1]);
-									dist_sx[i][1] = obst_link_distance(bump_dx[i], joints[2], joints[3]);
-
-									//confronto con soglie sicurezza link
-									if (dist_dx[i][0] < delta_safety) collision_l2 = true; 
-									if (dist_sx[i][0] < delta_safety) collision_l2 = true;
-
-									if (dist_dx[i][1] < delta_safety) collision_l4 = true;
-									if	(dist_sx[i][1] < delta_safety) collision_l4 = true;
-
+								for(j=0;j<10 && !collision_l2 && !collision_l4 && !possible_collision_floor;j++){
+									pose_vector_mult(tool_mpose, bump_low_O[j], bump_low[j]);
+									dist_low[j][0] = obst_link_distance(bump_low[j], joints[0], joints[1]);
+									dist_low[j][1] = obst_link_distance(bump_low[j], joints[2], joints[3]);
+									if (dist_low[j][0] < delta_safety){ collision_l2 = true;  point_coll[0]=1;point_coll[1]=j;minDist=dist_low[j][0];}
+									if (dist_low[j][1] < delta_safety){ collision_l4 = true;  point_coll[0]=1;point_coll[1]=j;minDist=dist_low[j][1];}	
+								}
+								for(k=0;k<5 && !collision_l2 && !collision_l4 && !possible_collision_floor;k++){
+									pose_vector_mult(tool_mpose, bump_dx_O[k], bump_dx[k]);
+									dist_dx[k][0] = obst_link_distance(bump_dx[k], joints[0], joints[1]);
+									dist_dx[k][1] = obst_link_distance(bump_dx[k], joints[2], joints[3]);
+									if (dist_dx[k][0] < delta_safety){ collision_l2 = true;  point_coll[0]=2;point_coll[1]=k;minDist=dist_dx[k][0];}
+									if (dist_dx[k][1] < delta_safety){ collision_l4 = true;  point_coll[0]=2;point_coll[1]=k;minDist=dist_dx[k][1];}	
+								}
+								for (m=0;m < 5 && !collision_l2 && !collision_l4 && !possible_collision_floor; m++) {
+									pose_vector_mult(tool_mpose, bump_sx_O[m], bump_sx[m]);
+									dist_sx[m][0] = obst_link_distance(bump_sx[m], joints[0], joints[1]);
+									dist_sx[m][1] = obst_link_distance(bump_dx[m], joints[2], joints[3]);
+									if (dist_sx[m][0] < delta_safety){ collision_l2 = true;  point_coll[0]=3;point_coll[1]=m;minDist=dist_sx[m][0];}
+									if (dist_sx[m][1] < delta_safety){ collision_l4 = true;  point_coll[0]=3;point_coll[1]=m;minDist=dist_sx[m][1];}
 									//confronto altezza da suolo
-									//if (dist_dx[i][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
-									//if (dist_sx[i][2] < 0.1){possible_collision_floor = true;}	
+									//if (dist_dx[m][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
+									//if (dist_sx[m][2] < 0.1){possible_collision_floor = true;}	
 								}
 							}
-							else { //calcola movimento simulato e decide se far muovere il robot
+							else if(state==2){ //calcola movimento simulato e decide se far muovere il robot
+								printf("\n********************\nCOLLISIONE RILEVATA! IL ROBOT TORNA NELLA POSIZIONE INIZIALE\n********************\n");
+								collision_l2 = false;
+								collision_l4 = false;
+								possible_collision_floor = false;
+								state=0;
+								/*for(k=0;k<6;k++)	q_sim[k] = qComauJoint_motion[k];
 								if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_sim, transDisp, rotDisp, 0.0, z_tool) == 0){
 									for (k = 0; k < 6; k++) q_sim[k] += dJoint_sim[k];
 									//calcolo cinematica diretta con lo spostamento potenziale di questa iterazione
 									forward_kinematics_tool(q_sim, x_tool, z_tool, tool_mpose_sim);
 									fkine(q_sim, joints_sim);
-
+									ind=point_coll[1];
 									//controllo se questa volta le distanze sono ammissibili!
-									for (i = 0;i < 10; i++) {
-										pose_vector_mult(tool_mpose_sim, bump_high_O[i], bump_high_sim[i]);
-										pose_vector_mult(tool_mpose_sim, bump_low_O[i], bump_low_sim[i]);
-										dist_high_sim[i][0] = obst_link_distance(bump_high_sim[i], joints_sim[0], joints_sim[1]);
-										dist_high_sim[i][1] = obst_link_distance(bump_high_sim[i], joints_sim[2], joints_sim[3]);
-										dist_low_sim[i][0] = obst_link_distance(bump_low_sim[i], joints_sim[0], joints_sim[1]);
-										dist_low_sim[i][1] = obst_link_distance(bump_low_sim[i], joints_sim[2], joints_sim[3]);
-
-										//confronto con soglie sicurezza link
-										if (dist_high_sim[i][0] < delta_safety || dist_low_sim[i][0] < delta_safety) break;
-
-										if (dist_high_sim[i][1] < delta_safety || dist_low_sim[i][1] < delta_safety) break;
-
-										//confronto altezza da suolo
-										//if (bump_high[i][2] < 0.1 || bump_low[i][2] < 0.1)	break; //10 [cm] di soglia
+									switch((int)point_coll[0]){
+										case 0:	pose_vector_mult(tool_mpose_sim, bump_high_O[ind], bump_high_sim[ind]);
+												dist_high_sim[ind][0] = obst_link_distance(bump_high_sim[ind], joints_sim[0], joints_sim[1]);
+												dist_high_sim[ind][1] = obst_link_distance(bump_high_sim[ind], joints_sim[2], joints_sim[3]);
+												if(dist_high_sim[ind][0]>minDist && dist_high_sim[ind][1]>minDist) no_coll=true;
+												break;
+										
+										case 1: pose_vector_mult(tool_mpose_sim, bump_low_O[ind], bump_low_sim[ind]);
+												dist_low_sim[ind][0] = obst_link_distance(bump_low_sim[ind], joints_sim[0], joints_sim[1]);
+												dist_low_sim[ind][1] = obst_link_distance(bump_low_sim[ind], joints_sim[2], joints_sim[3]);
+												if(dist_low_sim[ind][0]>minDist && dist_low_sim[ind][1]>minDist) no_coll=true;
+												break;
+										
+										case 2: pose_vector_mult(tool_mpose_sim, bump_dx_O[ind], bump_dx_sim[ind]);
+												dist_dx_sim[ind][0] = obst_link_distance(bump_dx_sim[ind], joints_sim[0], joints_sim[1]);
+												dist_dx_sim[ind][1] = obst_link_distance(bump_dx_sim[ind], joints_sim[2], joints_sim[3]);
+												if(dist_dx_sim[ind][0]>minDist && dist_dx_sim[ind][1]>minDist) no_coll=true;
+												break;
+										
+										case 3: pose_vector_mult(tool_mpose_sim, bump_sx_O[ind], bump_sx_sim[ind]);
+												dist_sx_sim[ind][0] = obst_link_distance(bump_sx_sim[ind], joints_sim[0], joints_sim[1]);
+												dist_sx_sim[ind][1] = obst_link_distance(bump_sx_sim[ind], joints_sim[2], joints_sim[3]);
+												if(dist_sx_sim[ind][0]>minDist && dist_sx_sim[ind][1]>minDist) no_coll=true;
+												break;
+										
 									}
 									
-									//check soglie di sicurezza link parte destra e sinistra paraurti
-									for (k = 0;k < 5; k++) {
-										pose_vector_mult(tool_mpose_sim, bump_dx_O[k], bump_dx_sim[k]);
-										pose_vector_mult(tool_mpose_sim, bump_sx_O[k], bump_sx_sim[k]);
-										dist_dx_sim[k][0] = obst_link_distance(bump_dx_sim[k], joints_sim[0], joints_sim[1]);
-										dist_dx_sim[k][1] = obst_link_distance(bump_dx_sim[k], joints_sim[2], joints_sim[3]);
-										dist_sx_sim[k][0] = obst_link_distance(bump_sx_sim[k], joints_sim[0], joints_sim[1]);
-										dist_sx_sim[k][1] = obst_link_distance(bump_sx_sim[k], joints_sim[2], joints_sim[3]);
-
-										//confronto con soglie sicurezza link
-										if (dist_dx_sim[k][0] < delta_safety || dist_sx_sim[k][0] < delta_safety) break;
-
-										if (dist_dx_sim[k][1] < delta_safety || dist_sx_sim[k][1] < delta_safety) break;
-
-										//confronto altezza da suolo
-										//if (bump_dx[k][2] < 0.1 || bump_sx[k][2] < 0.1)	break; //10 [cm] di soglia
-									}
-									//reset dei flag solo se TUTTI i punti rispettano i requisiti
-									if (i == 10 && k == 5) {
+									//reset dei flag solo se i punti rispettano i requisiti
+									if (no_coll) {
 										collision_l2 = false;
 										collision_l4 = false;
 										possible_collision_floor = false;
+										minDist=delta_safety;
 									}
-								}
-								
+								}	*/							
 							}
-							
-							
-							//calcolo distanze tra ogni punto del bumper e i link comau (Link1 = giunti 0-1; Link2 = giunti 2-3)
-							/*dist[0] = obst_link_distance(bump_dxH, joints[0], joints[1]);
-							dist[1] = obst_link_distance(bump_dxH, joints[2], joints[3]);*/
-					
+													
 
-							/*
+							
 							// check dead-zones
-							if (fabs(humanErgoPoseT[0] - humanToolPoseT[0]) < tresh_position &&
-								fabs(humanErgoPoseT[1] - humanToolPoseT[1]) < tresh_position &&
-								fabs(humanErgoPoseT[2] - humanToolPoseT[2]) < tresh_position){
+							vector_diff(humanErgoPoseT,humanToolPoseT,r_EH);//vettore distanza E-H
+							rotm2eulXYZ(errorR,eul_EH);//angoli XYZ dell'errore di orientamento
+							if (vector_norm(r_EH) < tresh_position){//verifico che la norma dell'errore di posizione sia sotto la soglia
 								tran_paused = true;
 							}else{
 								tran_paused = false;
 								//contatore = 0;
 							}
-							if(fabs(errorQuat[1]) < tresh_rotation &&
-								fabs(errorQuat[2]) < tresh_rotation &&
-								fabs(errorQuat[3]) < tresh_rotation){
+							if(fabs(eul_EH[0]) < tresh_rotation &&
+								fabs(eul_EH[1]) < tresh_rotation &&
+								fabs(eul_EH[2]) < tresh_rotation){
 								rot_paused = true;
 							}else{
 								rot_paused = false;
 								//contatore = 0;
 							}
-							*/
+							
 							
 							// stops every movement of the robot
-							if (valid != 1 || lefthand_raised || collision_l2 || collision_l4 || possible_collision_floor) {
+							if (valid != 1 || lefthand_raised tran_paused || rot_paused || collision_l2 || collision_l4 || possible_collision_floor) {
 								transDisp[0] = 0.0;
 								transDisp[1] = 0.0;
 								transDisp[2] = 0.0;
@@ -1308,17 +1305,17 @@ int main(int argc, char *argv[])
 							//printf("error_Quat_EO: %.3e  %.3e  %.3e\n", errorQuat_EO[1], errorQuat_EO[2], errorQuat_EO[3]);
 							//printf("norma rotazione = %.3e ; rotation saturated = %d \n", temp_norm_rot, rot_sat);
 							//printf("error_Quat: %.3e  %.3e  %.3e\n", errorQuat[1], errorQuat[2], errorQuat[3]);
-							//printf("tran_paused = %d; rot_paused = %d\n", tran_paused, rot_paused);
+							printf("tran_paused = %d; rot_paused = %d\n", tran_paused, rot_paused);
 							printf("x_limit = %d;	y_limit = %d;	z_limit = %d;\n",x_limit,y_limit,z_limit);
-							printf("estremoDX alto bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_dx[0][0], bump_dx[0][1], bump_dx[0][2]);
-							printf("estremoSX alto bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_sx[0][0], bump_sx[0][1], bump_sx[0][2]);
-							printf("estremoDX basso bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_dx[4][0], bump_dx[4][1], bump_dx[4][2]);
-							printf("estremoSX basso bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_sx[4][0], bump_sx[4][1], bump_sx[4][2]);
-							printf("link2: da(%6.3f,  %6.3f,  %6.3f) a(%6.3f,  %6.3f,  %6.3f)\n", joints[0][0], joints[0][1], joints[0][2], joints[1][0], joints[1][1], joints[1][2]);
-							printf("link4: da(%6.3f,  %6.3f,  %6.3f) a(%6.3f,  %6.3f,  %6.3f)\n", joints[2][0], joints[2][1], joints[2][2], joints[3][0], joints[3][1], joints[3][2]);
+							//printf("estremoDX alto bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_dx[0][0], bump_dx[0][1], bump_dx[0][2]);
+							//printf("estremoSX alto bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_sx[0][0], bump_sx[0][1], bump_sx[0][2]);
+							//printf("estremoDX basso bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_dx[4][0], bump_dx[4][1], bump_dx[4][2]);
+							//printf("estremoSX basso bumper: (%6.3f,  %6.3f,  %6.3f)\n", bump_sx[4][0], bump_sx[4][1], bump_sx[4][2]);
+							//printf("link2: da(%6.3f,  %6.3f,  %6.3f) a(%6.3f,  %6.3f,  %6.3f)\n", joints[0][0], joints[0][1], joints[0][2], joints[1][0], joints[1][1], joints[1][2]);
+							//printf("link4: da(%6.3f,  %6.3f,  %6.3f) a(%6.3f,  %6.3f,  %6.3f)\n", joints[2][0], joints[2][1], joints[2][2], joints[3][0], joints[3][1], joints[3][2]);
 							//for (i = 0;i < 6;i++)	printf("joint %i: (%6.3f, %6.3f, %6.3f)\n", i + 1, joints[i][0], joints[i][1], joints[i][2]);
-							printf("Collisione link2 = %d;	link4 = %d;	collisione suolo = %d;\n",collision_l2, collision_l4, possible_collision_floor);
-							printf("dist_low_dx_l2=%6.3f	dist_low_dx_l4=%6.3f  \ndist_low_sx_l2=%6.3f	dist_low_sx_l4=%6.3f\n",dist_high[0][0],dist_high[0][1],dist_high[9][0],dist_high[9][1]);
+							//printf("Collisione link2 = %d;	link4 = %d;	collisione suolo = %d;\n",collision_l2, collision_l4, possible_collision_floor);
+							//printf("distanza minima bumper = %6.3f\n",minDist);
                         }
 
 						// Preparazione pacchetto da inviare a C4GOpen
