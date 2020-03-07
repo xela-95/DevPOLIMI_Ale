@@ -29,8 +29,8 @@
 //include per thread
 #include <pthread.h>
 
-#define __CONTROL_GAIN_TRANS_DISPLACEMENT__   0.1	//proporzionale traslazione
-#define __CONTROL_GAIN_ROT_DISPLACEMENT__     0.15	//proporzionale rotazione
+//#define __CONTROL_GAIN_TRANS_DISPLACEMENT__   0.1	//proporzionale traslazione
+//#define __CONTROL_GAIN_ROT_DISPLACEMENT__     0.15	//proporzionale rotazione
 #define __TRAN_MAX__ 5.0E-4 //norma massima traslazione [m] --> 25 cm/s
 #define __ROT_MAX__	 3.6E-3 //norma massima rotazione ee [rad] --> 10 °/s
 #define _USE_MATH_DEFINES //per usare costanti come M_PI
@@ -77,7 +77,6 @@ int matrix_matrix_mult(orientation_matrix matrix1, orientation_matrix matrix2, o
 	int i, j, k;
 	for (i = 0; i<3; i++) for (j = 0; j<3; j++) for (k = 0; k<3; k++) result[i][j] += matrix1[i][k] * matrix2[k][j];
 	return 0;
-
 }
 // prodotto matrice di rotazione per vettore
 int matrix_vector_mult(orientation_matrix matrix, translation_vector vector, translation_vector result) {
@@ -86,7 +85,6 @@ int matrix_vector_mult(orientation_matrix matrix, translation_vector vector, tra
 	int i, j;
 	for (i = 0; i<3; i++) for (j = 0; j<3; j++) result[i] += matrix[i][j] * vector[j];
 	return 0;
-
 }
 //prodotto matrice omogenea per vettore traslazione
 int pose_vector_mult(pose_matrix matrix, translation_vector vector, translation_vector result){
@@ -395,7 +393,21 @@ void* Comunicazione() {
 
 int main(int argc, char *argv[])
 {
-	joint_vector dJoint_motion;
+	//guadagni proporzionale traslazione
+	double __CONTROL_GAIN_TRANS_DISPLACEMENT__[3]={0.2,0.45,0.35};
+	//double __CONTROL_GAIN_TRANS_DISPLACEMENT__[3]={0,0,0};
+	//guadagni proporzionale rotazione
+	
+	double __CONTROL_GAIN_ROT_DISPLACEMENT__[3]={0.0010,0.0035,0.0045}; //guadagni per angoli XYZ
+	//double __CONTROL_GAIN_ROT_DISPLACEMENT__[3]={0.4,0.4,0.4}; //guadagni per quaternione
+	//double __CONTROL_GAIN_ROT_DISPLACEMENT__[3]={0,0,0};
+	
+	//guadagni per stato 0
+	double __CONTROL_GAIN_TRANS_0__[3]={0.5,0.3,0.3};
+	double __CONTROL_GAIN_ROT_0__[3]={0.0010,0.0030,0.0030};
+	
+	
+	joint_vector dJoint_motion={0,0,0,0,0,0};
 	const double dt = 0.002;
 	int i, j, k, m;
 	int err;
@@ -438,7 +450,7 @@ int main(int argc, char *argv[])
 	int contatore = 0; //ausilio a kappa
 	double kappa = 0.0005; //per far andare a regime la velocità dopo 4 secondi
 	
-	quaternion_vec errorQuat; 		//quaternione errore di orientamento EH
+	quaternion_vec errorQuat={1,0,0,0}; 		//quaternione errore di orientamento EH
 	orientation_matrix humanToolPoseR_T, errorR; //trasposta R_H e matrice errore orientamento EH
 	
 	//dati per validazione con traiettoria sinusoidale
@@ -456,7 +468,7 @@ int main(int argc, char *argv[])
 	double temp_norm_rot; //norma omega [rad/s]
 	double temp_norm;	  //norma v [m/s]
 	orientation_matrix Rx_pi = {{1,0,0},{0,-1,0},{0,0,-1}}; //elementary rotation matrix of pi around x axis
-	quaternion_vec errorQuat_EO; 		//quaternione errore di orientamento EO
+	quaternion_vec errorQuat_EO={1,0,0,0}; 		//quaternione errore di orientamento EO
 	orientation_matrix RO, RO_rotatedT, RO_rotated, errorR_EO, errorR_EO_T; //matrice orientamento di O, trasposta R_O_rotated,  matrice errore orientamento EO e sua trasposta(per test)
 	translation_vector rO;
 	orientation_matrix RE_rotated, RO_T;
@@ -466,7 +478,7 @@ int main(int argc, char *argv[])
 	const double T_softControl = 4; 	// tempo di applicazione soft control [s];
 	double k_soft = 0; 					// variabile soft control
 	bool soft_start = false;			// flag che indica che va fatto il soft control
-	const double tresh_position = 0.1;	// thresold for the norm of the error to shut down the control [m]
+	const double tresh_position = 0.05;	// thresold for the norm of the error to shut down the control [m]
 	const double tresh_rotation = 5; 	// threshold for norm of orientation error [°]
 	bool tran_paused = false, rot_paused = false;
 	double bump_length = 0.88;	//sono tutte semi-distanze! (hp: paraurti montato centralmente)
@@ -485,7 +497,9 @@ int main(int argc, char *argv[])
 	double lefthand_tresh = 1.5; // threshold in [m]
 	bool collision_l2 = false, collision_l4 = false; // flag per probabile collisione con link 2 e 4
 	bool possible_collision_floor = false; //collisione paraurti suolo
-	bool x_limit = false, y_limit = false, z_limit = false; //flag limiti massimi workspace raggiunti
+	bool x_limit = false;//flag limiti massimi workspace raggiunti
+	bool y_limit = false;
+	bool z_limit = false; 
 	bool lefthand_raised = false; //flag per segnalare mano alzata sopra threshold
 	bool motion_OFF = false; //disabilita ogni movimento
 	translation_vector bump_points[6];		//CANCELLARE
@@ -507,10 +521,10 @@ int main(int argc, char *argv[])
 	samplePoints(bump_dxH_O, bump_dxL_O, 3, bump_dx_O);
 	samplePoints(bump_sxH_O, bump_sxL_O, 3, bump_sx_O);
 	int cont_mano = 0; //contatore dei cicli consecutivi con mano sollevata
-	int cont_mano_th = 5000; //soglia in cui passare a stato 3 (idle)
+	int cont_mano_th = 2500; //soglia in cui passare a stato 3 (idle)
 	orientation_matrix R_init = {{0.8312, 0, 0.5560},{0,1,0},{-0.5560, 0, 0.8312}};//initial orientation for state 0
-	double eul[3];//angoli di eulero XYZ riferiti a orientamento R_O rispetto a R_init
-	double eul_EH[3];//angoli di eulero XYZ riferiti a orientamento R_EH
+	double eul[3]={0,0,0};//angoli di eulero XYZ riferiti a orientamento R_O rispetto a R_init
+	double eul_EH[3]={0,0,0};//angoli di eulero XYZ riferiti a orientamento R_EH
 	joint_vector q_sim; //variabili di giunto simulate per safety collisioni
 	joint_vector dJoint_sim; //incremento di giunto simulato
 	double minDist = delta_safety;//distanza minima per uscire da stato collisione
@@ -518,6 +532,8 @@ int main(int argc, char *argv[])
 	int ind;
 	bool no_coll=true;
 	translation_vector r_EH;
+	orientation_matrix R_off={0.9848,0,0.1736,0,1,0,-0.1736,0,0.9848};
+	orientation_matrix R_E_hat={0,0,0,0,0,0,0,0,0};
 	
 	
     // Rx and Tx packets initialization
@@ -863,11 +879,10 @@ int main(int argc, char *argv[])
 							//Start state machine ********************************************************************************************
 							if (state == 0) { 	// steering robot to ergonomic pose
 
-
 								//porto la posizione di O a coincidere con E (a meno di una tolleranza)
-								transDisp[0] = __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[0] - tool_vpose.pos_x) * dt;
-								transDisp[1] = __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[1] - tool_vpose.pos_y) * dt;
-								transDisp[2] = __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[2] - tool_vpose.pos_z) * dt;
+								transDisp[0] = __CONTROL_GAIN_TRANS_0__[0] * (humanErgoPoseT[0] - tool_vpose.pos_x - 0.1) * dt;
+								transDisp[1] = __CONTROL_GAIN_TRANS_0__[1] * (humanErgoPoseT[1] - tool_vpose.pos_y) * dt;
+								transDisp[2] = __CONTROL_GAIN_TRANS_0__[2] * (humanErgoPoseT[2] - tool_vpose.pos_z - 0.05) * dt;
 
 								//Porto l'orientamento di O a essere uguale a quello di E (a meno di una rotazione di pi rad)
 								pose_mat_getRT(tool_mpose, RO, rO); //da matrice omogenea ad mat. rotazione e traslazione
@@ -886,8 +901,13 @@ int main(int argc, char *argv[])
 								//ottengo gli angoli di eulero XYZ corrispondenti all'errore di orientamento
 								rotm2eulXYZ(errorR_EO, eul);
 								
-								for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__ * errorQuat_EO[i + 1] * dt; // Wrob = KRw*errorQuat_EO(2:end)';*/
-
+								//P su quaternione
+								//for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__[i] * errorQuat_EO[i + 1] * dt; // Wrob = KRw*errorQuat_EO(2:end)';*/
+								
+								//P su angoli eulero
+								for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_0__[i] * eul[i] * dt;
+								
+								
 								//controllo su vicinananza end effector - posa ergonomica
 								//if (fabs(humanErgoPoseT[0] - tool_vpose.pos_x) < 0.05) transDisp[0] = 0.0;
 								//if (fabs(humanErgoPoseT[1] - tool_vpose.pos_y) < 0.05) transDisp[1] = 0.0;
@@ -915,28 +935,38 @@ int main(int argc, char *argv[])
 							}
 							else if (state == 2) {		// computing control law (robot ee velocities)
 
-								if(cont_mano > cont_mano_th)	state = 3; //se ho tenuto la mano alzata per 10s vado in stato idle
+								if(cont_mano > cont_mano_th){	
+									state = 3; //se ho tenuto la mano alzata per 10s vado in stato idle
+									printf("**********************\n**********************\nGO TO STATE 3!\n**********************\n**********************");
+								}
 
 								//soft start
 								/*if (contatore < 2000) kappa = 0.0005*contatore;
 								else kappa = 1;*/
 
 								//controllo traslazione: Vrob = KRv*(Perg - Phum);
-								for (i = 0; i < 3; i++) transDisp[i] = __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[i] - humanToolPoseT[i]) * dt; 
-								//transDisp[0] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[0] - humanToolPoseT[0]) * dt;
-								//transDisp[1] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[1] - humanToolPoseT[1]) * dt;
-								//transDisp[2] = kappa * __CONTROL_GAIN_TRANS_DISPLACEMENT__ * (humanErgoPoseT[2] - humanToolPoseT[2]) * dt;
+								//for (i = 0; i < 3; i++) transDisp[i] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[i] * (humanErgoPoseT[i] - humanToolPoseT[i]) * dt; 
+								transDisp[0] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[0] * (humanErgoPoseT[0] - humanToolPoseT[0]) * dt;
+								transDisp[1] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[1] * (humanErgoPoseT[1] - humanToolPoseT[1]) * dt;
+								transDisp[2] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[2] * (humanErgoPoseT[2] - humanToolPoseT[2]-0.1) * dt;
 
 								//Controllo rotazionale: Wrob = KRw*errorQuat(2:end)';
+								matrix_matrix_mult(humanErgoPoseR,R_off,R_E_hat);
 								matrix_transpose(humanToolPoseR, humanToolPoseR_T);// è la trasposta della matrice di orientamento del tool frame rispetto al world frame
-								matrix_matrix_mult(humanErgoPoseR, humanToolPoseR_T, errorR); // errorR = Rerg*Rhum';
+								//matrix_matrix_mult(humanErgoPoseR, humanToolPoseR_T, errorR); // errorR = Rerg*Rhum';
+								matrix_matrix_mult(R_E_hat, humanToolPoseR_T, errorR);
 								get_quaternion(errorR, &errorQuat[0]); // errorQuat = rotm2quat(errorR);
-
+								rotm2eulXYZ(errorR,eul_EH);//angoli XYZ dell'errore di orientamento [°]
+								
 								//test errore di orientamento trasposto!
 								//matrix_transpose(&errorR[0][0], &errorR_T[0][0]);
 								//get_quaternion(&errorR_T[0][0], &errorQuat[0]);
 								
-								for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__ * errorQuat[i + 1] * dt; 
+								//proporzionale su QUATERNIONE UNITARIO
+								//for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__[i] * errorQuat[i + 1] * dt; 
+								
+								//proporzionale su ANGOLI EULERO
+								for (i = 0; i < 3; i++) rotDisp[i] = __CONTROL_GAIN_ROT_DISPLACEMENT__[i] * eul_EH[i] * dt; 
 
 								//update contatore mod 5
 								contatore = contatore + 1;
@@ -1026,7 +1056,7 @@ int main(int argc, char *argv[])
 							x_limit = false;
 							y_limit = false;
 							z_limit = false;
-							if ((tool_vpose.pos_x < 0.65) && (transDisp[0] < 0) || (tool_vpose.pos_x > 1.80) && (transDisp[0] > 0)) {
+							if ((tool_vpose.pos_x < 0.80) && (transDisp[0] < 0) || (tool_vpose.pos_x > 1.30) && (transDisp[0] > 0)) {
 								transDisp[0] = 0.0;
 								x_limit = true;
 							}
@@ -1056,18 +1086,9 @@ int main(int argc, char *argv[])
 							}
 							
 
-							
-							
 							///////////////////////////////////////////////////////////////////////////////////
 							// Check the computed motion - SAFETY
 							///////////////////////////////////////////////////////////////////////////////////
-							
-							//reset flags
-							//motion_OFF = false;
-							//collision_l2 = false;
-							//collision_l4 = false;
-							//possible_collision_floor = false;
-							//lefthand_raised = false;
 							
 							// Left hand height
 													
@@ -1080,142 +1101,143 @@ int main(int argc, char *argv[])
 								lefthand_raised = false;
 							}
 
-							
-							
-							//check soglie di sicurezza link parte alta e bassa paraurti
-							if(state==2 && !possible_collision_floor && !collision_l2 && !collision_l4){
-								// alternative computation of forward kinematics
-								fkine(qComauJoint_act, joints);
-								
-								//controlla distanze
-								for (i = 0;i < 10 && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
-									pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
-									dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
-									dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
-									//confronto con soglie sicurezza link
-									if (dist_high[i][0] < delta_safety){ collision_l2 = true;  point_coll[0]=0;point_coll[1]=i;minDist=dist_high[i][0];}
-									if (dist_high[i][1] < delta_safety){ collision_l4 = true;  point_coll[0]=0;point_coll[1]=i;minDist=dist_high[i][1];}							
+							// check su collisioni e dead-zone da fare solo in stato 2
+							if(state==2){ 
+								//check soglie di sicurezza link parte alta e bassa paraurti
+								if(!possible_collision_floor && !collision_l2 && !collision_l4){
+									// alternative computation of forward kinematics
+									fkine(qComauJoint_act, joints);
 									
-									//confronto altezza da suolo
-									//if (bump_high[i][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
-									//if (bump_low[i][2] < 0.1){possible_collision_floor = true;}	
-								}
-								for(j=0;j<10 && !collision_l2 && !collision_l4 && !possible_collision_floor;j++){
-									pose_vector_mult(tool_mpose, bump_low_O[j], bump_low[j]);
-									dist_low[j][0] = obst_link_distance(bump_low[j], joints[0], joints[1]);
-									dist_low[j][1] = obst_link_distance(bump_low[j], joints[2], joints[3]);
-									if (dist_low[j][0] < delta_safety){ collision_l2 = true;  point_coll[0]=1;point_coll[1]=j;minDist=dist_low[j][0];}
-									if (dist_low[j][1] < delta_safety){ collision_l4 = true;  point_coll[0]=1;point_coll[1]=j;minDist=dist_low[j][1];}	
-								}
-								for(k=0;k<5 && !collision_l2 && !collision_l4 && !possible_collision_floor;k++){
-									pose_vector_mult(tool_mpose, bump_dx_O[k], bump_dx[k]);
-									dist_dx[k][0] = obst_link_distance(bump_dx[k], joints[0], joints[1]);
-									dist_dx[k][1] = obst_link_distance(bump_dx[k], joints[2], joints[3]);
-									if (dist_dx[k][0] < delta_safety){ collision_l2 = true;  point_coll[0]=2;point_coll[1]=k;minDist=dist_dx[k][0];}
-									if (dist_dx[k][1] < delta_safety){ collision_l4 = true;  point_coll[0]=2;point_coll[1]=k;minDist=dist_dx[k][1];}	
-								}
-								for (m=0;m < 5 && !collision_l2 && !collision_l4 && !possible_collision_floor; m++) {
-									pose_vector_mult(tool_mpose, bump_sx_O[m], bump_sx[m]);
-									dist_sx[m][0] = obst_link_distance(bump_sx[m], joints[0], joints[1]);
-									dist_sx[m][1] = obst_link_distance(bump_dx[m], joints[2], joints[3]);
-									if (dist_sx[m][0] < delta_safety){ collision_l2 = true;  point_coll[0]=3;point_coll[1]=m;minDist=dist_sx[m][0];}
-									if (dist_sx[m][1] < delta_safety){ collision_l4 = true;  point_coll[0]=3;point_coll[1]=m;minDist=dist_sx[m][1];}
-									//confronto altezza da suolo
-									//if (dist_dx[m][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
-									//if (dist_sx[m][2] < 0.1){possible_collision_floor = true;}	
-								}
-							}
-							else if(state==2){ //calcola movimento simulato e decide se far muovere il robot
-								printf("\n********************\nCOLLISIONE RILEVATA! IL ROBOT TORNA NELLA POSIZIONE INIZIALE\n********************\n");
-								collision_l2 = false;
-								collision_l4 = false;
-								possible_collision_floor = false;
-								state=0;
-								/*for(k=0;k<6;k++)	q_sim[k] = qComauJoint_motion[k];
-								if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_sim, transDisp, rotDisp, 0.0, z_tool) == 0){
-									for (k = 0; k < 6; k++) q_sim[k] += dJoint_sim[k];
-									//calcolo cinematica diretta con lo spostamento potenziale di questa iterazione
-									forward_kinematics_tool(q_sim, x_tool, z_tool, tool_mpose_sim);
-									fkine(q_sim, joints_sim);
-									ind=point_coll[1];
-									//controllo se questa volta le distanze sono ammissibili!
-									switch((int)point_coll[0]){
-										case 0:	pose_vector_mult(tool_mpose_sim, bump_high_O[ind], bump_high_sim[ind]);
-												dist_high_sim[ind][0] = obst_link_distance(bump_high_sim[ind], joints_sim[0], joints_sim[1]);
-												dist_high_sim[ind][1] = obst_link_distance(bump_high_sim[ind], joints_sim[2], joints_sim[3]);
-												if(dist_high_sim[ind][0]>minDist && dist_high_sim[ind][1]>minDist) no_coll=true;
-												break;
+									//controlla distanze
+									for (i = 0;i < 10 && !collision_l2 && !collision_l4 && !possible_collision_floor; i++) {
+										pose_vector_mult(tool_mpose, bump_high_O[i], bump_high[i]);
+										dist_high[i][0] = obst_link_distance(bump_high[i], joints[0], joints[1]);
+										dist_high[i][1] = obst_link_distance(bump_high[i], joints[2], joints[3]);
+										//confronto con soglie sicurezza link
+										if (dist_high[i][0] < delta_safety){ collision_l2 = true;  point_coll[0]=0;point_coll[1]=i;minDist=dist_high[i][0];}
+										if (dist_high[i][1] < delta_safety){ collision_l4 = true;  point_coll[0]=0;point_coll[1]=i;minDist=dist_high[i][1];}							
 										
-										case 1: pose_vector_mult(tool_mpose_sim, bump_low_O[ind], bump_low_sim[ind]);
-												dist_low_sim[ind][0] = obst_link_distance(bump_low_sim[ind], joints_sim[0], joints_sim[1]);
-												dist_low_sim[ind][1] = obst_link_distance(bump_low_sim[ind], joints_sim[2], joints_sim[3]);
-												if(dist_low_sim[ind][0]>minDist && dist_low_sim[ind][1]>minDist) no_coll=true;
-												break;
-										
-										case 2: pose_vector_mult(tool_mpose_sim, bump_dx_O[ind], bump_dx_sim[ind]);
-												dist_dx_sim[ind][0] = obst_link_distance(bump_dx_sim[ind], joints_sim[0], joints_sim[1]);
-												dist_dx_sim[ind][1] = obst_link_distance(bump_dx_sim[ind], joints_sim[2], joints_sim[3]);
-												if(dist_dx_sim[ind][0]>minDist && dist_dx_sim[ind][1]>minDist) no_coll=true;
-												break;
-										
-										case 3: pose_vector_mult(tool_mpose_sim, bump_sx_O[ind], bump_sx_sim[ind]);
-												dist_sx_sim[ind][0] = obst_link_distance(bump_sx_sim[ind], joints_sim[0], joints_sim[1]);
-												dist_sx_sim[ind][1] = obst_link_distance(bump_sx_sim[ind], joints_sim[2], joints_sim[3]);
-												if(dist_sx_sim[ind][0]>minDist && dist_sx_sim[ind][1]>minDist) no_coll=true;
-												break;
-										
+										//confronto altezza da suolo
+										//if (bump_high[i][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
+										//if (bump_low[i][2] < 0.1){possible_collision_floor = true;}	
 									}
-									
-									//reset dei flag solo se i punti rispettano i requisiti
-									if (no_coll) {
-										collision_l2 = false;
-										collision_l4 = false;
-										possible_collision_floor = false;
-										minDist=delta_safety;
+									for(j=0;j<10 && !collision_l2 && !collision_l4 && !possible_collision_floor;j++){
+										pose_vector_mult(tool_mpose, bump_low_O[j], bump_low[j]);
+										dist_low[j][0] = obst_link_distance(bump_low[j], joints[0], joints[1]);
+										dist_low[j][1] = obst_link_distance(bump_low[j], joints[2], joints[3]);
+										if (dist_low[j][0] < delta_safety){ collision_l2 = true;  point_coll[0]=1;point_coll[1]=j;minDist=dist_low[j][0];}
+										if (dist_low[j][1] < delta_safety){ collision_l4 = true;  point_coll[0]=1;point_coll[1]=j;minDist=dist_low[j][1];}	
 									}
-								}	*/							
-							}
-													
+									for(k=0;k<5 && !collision_l2 && !collision_l4 && !possible_collision_floor;k++){
+										pose_vector_mult(tool_mpose, bump_dx_O[k], bump_dx[k]);
+										dist_dx[k][0] = obst_link_distance(bump_dx[k], joints[0], joints[1]);
+										dist_dx[k][1] = obst_link_distance(bump_dx[k], joints[2], joints[3]);
+										if (dist_dx[k][0] < delta_safety){ collision_l2 = true;  point_coll[0]=2;point_coll[1]=k;minDist=dist_dx[k][0];}
+										if (dist_dx[k][1] < delta_safety){ collision_l4 = true;  point_coll[0]=2;point_coll[1]=k;minDist=dist_dx[k][1];}	
+									}
+									for (m=0;m < 5 && !collision_l2 && !collision_l4 && !possible_collision_floor; m++) {
+										pose_vector_mult(tool_mpose, bump_sx_O[m], bump_sx[m]);
+										dist_sx[m][0] = obst_link_distance(bump_sx[m], joints[0], joints[1]);
+										dist_sx[m][1] = obst_link_distance(bump_dx[m], joints[2], joints[3]);
+										if (dist_sx[m][0] < delta_safety){ collision_l2 = true;  point_coll[0]=3;point_coll[1]=m;minDist=dist_sx[m][0];}
+										if (dist_sx[m][1] < delta_safety){ collision_l4 = true;  point_coll[0]=3;point_coll[1]=m;minDist=dist_sx[m][1];}
+										//confronto altezza da suolo
+										//if (dist_dx[m][2] < 0.1){possible_collision_floor = true;}//10 [cm] di soglia}
+										//if (dist_sx[m][2] < 0.1){possible_collision_floor = true;}	
+									}
+								}
+								else{ //calcola movimento simulato e decide se far muovere il robot
+									printf("\n********************\nCOLLISIONE RILEVATA! IL ROBOT TORNA NELLA POSIZIONE INIZIALE\n********************\n");
+									collision_l2 = false;
+									collision_l4 = false;
+									possible_collision_floor = false;
+									state=0;
+									/*for(k=0;k<6;k++)	q_sim[k] = qComauJoint_motion[k];
+									if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_sim, transDisp, rotDisp, 0.0, z_tool) == 0){
+										for (k = 0; k < 6; k++) q_sim[k] += dJoint_sim[k];
+										//calcolo cinematica diretta con lo spostamento potenziale di questa iterazione
+										forward_kinematics_tool(q_sim, x_tool, z_tool, tool_mpose_sim);
+										fkine(q_sim, joints_sim);
+										ind=point_coll[1];
+										//controllo se questa volta le distanze sono ammissibili!
+										switch((int)point_coll[0]){
+											case 0:	pose_vector_mult(tool_mpose_sim, bump_high_O[ind], bump_high_sim[ind]);
+													dist_high_sim[ind][0] = obst_link_distance(bump_high_sim[ind], joints_sim[0], joints_sim[1]);
+													dist_high_sim[ind][1] = obst_link_distance(bump_high_sim[ind], joints_sim[2], joints_sim[3]);
+													if(dist_high_sim[ind][0]>minDist && dist_high_sim[ind][1]>minDist) no_coll=true;
+													break;
+											
+											case 1: pose_vector_mult(tool_mpose_sim, bump_low_O[ind], bump_low_sim[ind]);
+													dist_low_sim[ind][0] = obst_link_distance(bump_low_sim[ind], joints_sim[0], joints_sim[1]);
+													dist_low_sim[ind][1] = obst_link_distance(bump_low_sim[ind], joints_sim[2], joints_sim[3]);
+													if(dist_low_sim[ind][0]>minDist && dist_low_sim[ind][1]>minDist) no_coll=true;
+													break;
+											
+											case 2: pose_vector_mult(tool_mpose_sim, bump_dx_O[ind], bump_dx_sim[ind]);
+													dist_dx_sim[ind][0] = obst_link_distance(bump_dx_sim[ind], joints_sim[0], joints_sim[1]);
+													dist_dx_sim[ind][1] = obst_link_distance(bump_dx_sim[ind], joints_sim[2], joints_sim[3]);
+													if(dist_dx_sim[ind][0]>minDist && dist_dx_sim[ind][1]>minDist) no_coll=true;
+													break;
+											
+											case 3: pose_vector_mult(tool_mpose_sim, bump_sx_O[ind], bump_sx_sim[ind]);
+													dist_sx_sim[ind][0] = obst_link_distance(bump_sx_sim[ind], joints_sim[0], joints_sim[1]);
+													dist_sx_sim[ind][1] = obst_link_distance(bump_sx_sim[ind], joints_sim[2], joints_sim[3]);
+													if(dist_sx_sim[ind][0]>minDist && dist_sx_sim[ind][1]>minDist) no_coll=true;
+													break;
+											
+										}
+										
+										//reset dei flag solo se i punti rispettano i requisiti
+										if (no_coll) {
+											collision_l2 = false;
+											collision_l4 = false;
+											possible_collision_floor = false;
+											minDist=delta_safety;
+										}
+									}	*/							
+								}
+														
 
-							
-							// check dead-zones
-							vector_diff(humanErgoPoseT,humanToolPoseT,r_EH);//vettore distanza E-H
-							rotm2eulXYZ(errorR,eul_EH);//angoli XYZ dell'errore di orientamento
-							if (vector_norm(r_EH) < tresh_position){//verifico che la norma dell'errore di posizione sia sotto la soglia
-								tran_paused = true;
-							}else{
-								tran_paused = false;
-								//contatore = 0;
+								
+								// check dead-zones
+								vector_diff(humanErgoPoseT,humanToolPoseT,r_EH);//vettore distanza E-H
+								if (vector_norm(r_EH) < tresh_position){//verifico che la norma dell'errore di posizione sia sotto la soglia
+									tran_paused = true;
+								}else{
+									tran_paused = false;
+									//contatore = 0;
+								}
+								if(fabs(eul_EH[0]) < tresh_rotation &&
+									fabs(eul_EH[1]) < tresh_rotation &&
+									fabs(eul_EH[2]) < tresh_rotation){
+									rot_paused = true;
+								}else{
+									rot_paused = false;
+									//contatore = 0;
+								}
 							}
-							if(fabs(eul_EH[0]) < tresh_rotation &&
-								fabs(eul_EH[1]) < tresh_rotation &&
-								fabs(eul_EH[2]) < tresh_rotation){
-								rot_paused = true;
-							}else{
-								rot_paused = false;
-								//contatore = 0;
-							}
 							
 							
-							// stops every movement of the robot
-							if (valid != 1 || lefthand_raised tran_paused || rot_paused || collision_l2 || collision_l4 || possible_collision_floor) {
+							// stops the translation and rotation of the robot
+							if (valid != 1 || lefthand_raised || tran_paused || collision_l2 || collision_l4 || possible_collision_floor) {
 								transDisp[0] = 0.0;
 								transDisp[1] = 0.0;
-								transDisp[2] = 0.0;
+								transDisp[2] = 0.0;								
+							}
+							if (valid != 1 || lefthand_raised || rot_paused || collision_l2 || collision_l4 || possible_collision_floor) {
 								rotDisp[0] = 0.0;
 								rotDisp[1] = 0.0;
 								rotDisp[2] = 0.0;
 							}
 						}
 						
-						
-						
+
 						///////////////////////////////////////////////////////////////////////////////////
 						// Compute the joint displacement												 //
 						///////////////////////////////////////////////////////////////////////////////////
 
 						
-						/*if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
+						if (inverse_diffkinematics_tool(qComauJoint_act, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
 							printf("Singularity in diffkinematics inversion.\n");
 							abnormal_behaviour = true;
 						}
@@ -1223,19 +1245,23 @@ int main(int argc, char *argv[])
 						{
 							for (k = 0; k < 6; k++)
 								qComauJoint_motion[k] += dJoint_motion[k];
-						}*/
+						}
 						// solo per la simulazione --> in questo modo riesco a vedere la simulazione, ma posso anche applicare i comandi al comau
-						if (inverse_diffkinematics_tool(qComauJoint_motion, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
+						/*if (inverse_diffkinematics_tool(qComauJoint_motion, dJoint_motion, transDisp, rotDisp, 0.0, z_tool) < 0) {
 							printf("Singularity in diffkinematics inversion. \n");
 							abnormal_behaviour = true;
 						}
 						else {
 							int k;
+							//controllo su giunto 5 per singolarità di polso
+							//if(fabs(qComauJoint_motion[4]) < 5 && fabs(qComauJoint_motion[4] + dJoint_motion[4]) < fabs(qComauJoint_motion[4]))
+								//dJoint_motion[4] = 0;
+
 							for (k = 0; k < 6; k++)
 								qComauJoint_motion[k] += dJoint_motion[k];
-						}
-
+						}*/
 						
+											
 						// Calcola il riferimento incrementale
 						for (k = 0; k < 6; k++)
 						{
@@ -1303,7 +1329,7 @@ int main(int argc, char *argv[])
 							//printf("aerografo rispetto ad end effector: %.3e  %.3e  %.3e\n\n", centro_areografo_ee[0], centro_areografo_ee[1], centro_areografo_ee[2]);
 							//printf("altezza mano sinistra:  %.3e\n", lefthandheight);
 							//printf("error_Quat_EO: %.3e  %.3e  %.3e\n", errorQuat_EO[1], errorQuat_EO[2], errorQuat_EO[3]);
-							//printf("norma rotazione = %.3e ; rotation saturated = %d \n", temp_norm_rot, rot_sat);
+							printf("trasl_sat = %d ; rot_saturated = %d \n", trans_sat, rot_sat);
 							//printf("error_Quat: %.3e  %.3e  %.3e\n", errorQuat[1], errorQuat[2], errorQuat[3]);
 							printf("tran_paused = %d; rot_paused = %d\n", tran_paused, rot_paused);
 							printf("x_limit = %d;	y_limit = %d;	z_limit = %d;\n",x_limit,y_limit,z_limit);
@@ -1353,73 +1379,75 @@ int main(int argc, char *argv[])
                         // Send data to datalogger
                         datalog_msg msg;
                         msg.cmd = DATALOG_NONE;
-                        msg.numVar = 105;
+                        msg.numVar = 81;
                         msg.varVector[0] = t;
 
-                        int k;
                         for (k=0; k<6; k++)
                         {
                             msg.varVector[ 1+k] = qComauJoint_ref[k];
                             msg.varVector[ 7+k] = qComauJoint_act[k];
-                            msg.varVector[13+k] = qComauAxis_ref[k];
-                            msg.varVector[19+k] = qComauAxis_act[k];
-                            msg.varVector[25+k] = dqComauJoint_ref[k];
-                            msg.varVector[31+k] = dqComauJoint_act[k];
-                            msg.varVector[37+k] = dqComauAxis_ref[k];
-                            msg.varVector[43+k] = dqComauAxis_act[k];
-							
-							msg.varVector[78+k] = qComauJoint_motion[k];
-							//for(i=0;i<3;i++)	msg.varVector[96+k+i] = joints[k][i];
-							
-
+							msg.varVector[13+k] = qComauJoint_motion[k];
+                            msg.varVector[19+k] = dqComauJoint_act[k];
                         }
-                        msg.varVector[49] = tool_vpose_sim.pos_x; //posa simulata dell'end effector
-                        msg.varVector[50] = tool_vpose_sim.pos_y;
-                        msg.varVector[51] = tool_vpose_sim.pos_z;
-						msg.varVector[52] = transDisp[0]; //incrementi di posizione dell'end effector (velocità)
-                        msg.varVector[53] = transDisp[1];
-                        msg.varVector[54] = transDisp[2];
-						msg.varVector[55] = humanToolPoseT[0]; //inserisco i dati dal kinect nel datalogger
-						msg.varVector[56] = humanToolPoseT[1];
-						msg.varVector[57] = humanToolPoseT[2];
-						msg.varVector[58] = valid;
-						msg.varVector[59] = humanErgoPoseT[0];
-						msg.varVector[60] = humanErgoPoseT[1];
-						msg.varVector[61] = humanErgoPoseT[2];
-						msg.varVector[62] = tool_vpose.pos_x;//posa reale end effector
-						msg.varVector[63] = tool_vpose.pos_y;
-						msg.varVector[64] = tool_vpose.pos_z;
-						msg.varVector[65] = centro_areografo_ee[0];
-						msg.varVector[66] = centro_areografo_ee[1];
-						msg.varVector[67] = centro_areografo_ee[2];
-						msg.varVector[68] = quaternionErgoPoseR[0];
-						msg.varVector[69] = quaternionErgoPoseR[1];
-						msg.varVector[70] = quaternionErgoPoseR[2];
-						msg.varVector[71] = quaternionErgoPoseR[3];
-						msg.varVector[72] = quaternionToolPoseR[0];
-						msg.varVector[73] = quaternionToolPoseR[1];
-						msg.varVector[74] = quaternionToolPoseR[2];
-						msg.varVector[75] = quaternionToolPoseR[3];
-						msg.varVector[76] = tran_paused;
-						msg.varVector[77] = rot_paused;
-						msg.varVector[84] = state;
-						msg.varVector[85] = lefthandheight;
-						msg.varVector[86] = errorQuat[0];
-						msg.varVector[87] = errorQuat[1];
-						msg.varVector[88] = errorQuat[2];
-						msg.varVector[89] = errorQuat[3];
-						msg.varVector[90] = __CONTROL_GAIN_TRANS_DISPLACEMENT__;
-						msg.varVector[91] = __CONTROL_GAIN_ROT_DISPLACEMENT__;
-						msg.varVector[92] = possible_collision_floor;
-						msg.varVector[93] = x_limit;
-						msg.varVector[94] = y_limit;
-						msg.varVector[95] = z_limit;
-						msg.varVector[96] = lefthand_raised;
-						msg.varVector[97] = collision_l2;
-						msg.varVector[98] = collision_l4;
-						//msg.varVector[99] = joints[5][0];//end effector position with fkine
-						//msg.varVector[100] = joints[5][1];
-						//msg.varVector[101] = joints[5][2];
+                        msg.varVector[25] = tool_vpose_sim.pos_x; //posa simulata dell'end effector
+                        msg.varVector[26] = tool_vpose_sim.pos_y;
+                        msg.varVector[27] = tool_vpose_sim.pos_z;
+						msg.varVector[28] = transDisp[0]; //incrementi di posizione dell'end effector (velocità)
+                        msg.varVector[29] = transDisp[1];
+                        msg.varVector[30] = transDisp[2];
+						msg.varVector[31] = humanToolPoseT[0]; //inserisco i dati dal kinect nel datalogger
+						msg.varVector[32] = humanToolPoseT[1];
+						msg.varVector[33] = humanToolPoseT[2];
+						msg.varVector[34] = valid;
+						msg.varVector[35] = humanErgoPoseT[0];
+						msg.varVector[36] = humanErgoPoseT[1];
+						msg.varVector[37] = humanErgoPoseT[2];
+						msg.varVector[38] = tool_vpose.pos_x;//posa reale end effector
+						msg.varVector[39] = tool_vpose.pos_y;
+						msg.varVector[40] = tool_vpose.pos_z;
+						msg.varVector[41] = centro_areografo_ee[0];
+						msg.varVector[42] = centro_areografo_ee[1];
+						msg.varVector[43] = centro_areografo_ee[2];
+						msg.varVector[44] = quaternionErgoPoseR[0];
+						msg.varVector[45] = quaternionErgoPoseR[1];
+						msg.varVector[46] = quaternionErgoPoseR[2];
+						msg.varVector[47] = quaternionErgoPoseR[3];
+						msg.varVector[48] = quaternionToolPoseR[0];
+						msg.varVector[49] = quaternionToolPoseR[1];
+						msg.varVector[50] = quaternionToolPoseR[2];
+						msg.varVector[51] = quaternionToolPoseR[3];
+						msg.varVector[52] = tran_paused;
+						msg.varVector[53] = rot_paused;
+						msg.varVector[54] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[0];
+						msg.varVector[55] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[1];
+						msg.varVector[56] = __CONTROL_GAIN_TRANS_DISPLACEMENT__[2];
+						msg.varVector[57] = __CONTROL_GAIN_ROT_DISPLACEMENT__[0];
+						msg.varVector[58] = __CONTROL_GAIN_ROT_DISPLACEMENT__[1];
+						msg.varVector[59] = __CONTROL_GAIN_ROT_DISPLACEMENT__[2];
+						msg.varVector[60] = state;
+						msg.varVector[61] = lefthandheight;
+						msg.varVector[62] = errorQuat[0];
+						msg.varVector[63] = errorQuat[1];
+						msg.varVector[64] = errorQuat[2];
+						msg.varVector[65] = errorQuat[3];
+						msg.varVector[66] = trans_sat;
+						msg.varVector[67] = rot_sat;
+						msg.varVector[68] = possible_collision_floor;
+						msg.varVector[69] = x_limit;
+						msg.varVector[70] = y_limit;
+						msg.varVector[71] = z_limit;
+						msg.varVector[72] = lefthand_raised;
+						msg.varVector[73] = collision_l2;
+						msg.varVector[74] = collision_l4;
+						msg.varVector[75] = eul[0];
+						msg.varVector[76] = eul[1];
+						msg.varVector[77] = eul[2];
+						msg.varVector[78] = eul_EH[0];
+						msg.varVector[79] = eul_EH[1];
+						msg.varVector[80] = eul_EH[2];
+						//msg.varVector[105] = joints[5][0];//end effector position with fkine
+						//msg.varVector[106] = joints[5][1];
+						//msg.varVector[107] = joints[5][2];
 						
 
                         if (rt_mbx_send_if(mbx, &msg, sizeof(msg)) < 0)
